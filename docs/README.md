@@ -1,17 +1,17 @@
 # HealthcareAI2 documentation
 
-HealthcareAI2 is planned as a synthetic-data clinical workflow assistance platform. Qualified practitioners retain decision authority; this project is not a diagnostic or prescribing system.
+HealthcareAI2 is a partially implemented synthetic-data clinical workflow assistance project. Qualified practitioners retain decision authority; this project is not a diagnostic or prescribing system.
 
 ## Status
 
-The repository inspection on 2026-11-06 found no source files, dependency manifests, tests, or existing documentation. This documentation is the Phase 0 foundation. No runtime capability or test result is claimed yet. The first implementation gate is one complete registration-to-alert workflow, including a deterministic demonstration protocol, model participation, approval, and audit evidence.
+The repository began empty. Phase 0 is complete. The Phase 1 vertical workflow now passes locally with a real open-weights model; 10 automated tests pass, and persistence after service restart was verified. Clean-environment reproducibility and later department workflows remain incomplete. See [EVALS](09_TESTING/EVALS.md) and [known limitations](11_MAINTENANCE/KNOWN_LIMITATIONS.md).
 
 ## Start here
 
 - [Getting started](00_GETTING_STARTED/START_HERE.md) — current project status and implementation plan.
 - [Requirements](01_PROJECT/REQUIREMENTS.md) — scope and acceptance gates extracted from the master prompt.
-- [Initial architecture](03_ARCHITECTURE/ARCHITECTURE.md) — proposed components and safety boundaries.
+- [Architecture](03_ARCHITECTURE/ARCHITECTURE.md) — implemented components, safety boundaries, and gaps.
 - [Implementation plan](11_MAINTENANCE/IMPLEMENTATION_PLAN.md) — ordered work and evidence required at each gate.
 - [Known limitations](11_MAINTENANCE/KNOWN_LIMITATIONS.md) — verified gaps and constraints.
 
-Detailed workflow, MCP, AI, data, frontend, safety, evaluation, and submission documents will be completed alongside implementation so they describe actual behavior rather than speculative features.
+Workflow, data, frontend, submission, and maintenance documentation will be completed as those capabilities are implemented. Existing design docs distinguish current behavior from planned work.

@@ -1,22 +1,22 @@
 # Implementation plan
 
-Work follows the mandatory gates in the master prompt. Expansion is blocked until the vertical workflow is executed and its evidence is recorded.
+Work follows the mandatory gates in the master prompt. The first vertical workflow has passed locally and its evidence is recorded in [EVALS.md](../09_TESTING/EVALS.md). Expansion may now begin, but must retain the deterministic/model boundary.
 
 ## Phase 0 — repository and documentation foundation
 
-**Finding:** repository contains no tracked source or dependency files. **Deliverable:** this requirements baseline, proposed architecture, and plan. **Status:** documentation foundation started; no runtime behavior exists.
+**Finding:** repository initially contained no source or dependency files. **Deliverable:** requirements baseline, architecture, and plan. **Status:** complete; the baseline and decisions are documented.
 
 ## Phase 1 — vertical workflow design and implementation
 
-Select a minimal stack and define the synthetic patient, encounter schema, demonstration protocol, MCP tools, orchestration boundary, model interface, approval states, audit records, and frontend path. Build only registration through reviewed alert execution. Run automated tests against actual services; capture example tool requests/responses and audit evidence. Stop and fix any gate failure.
+Selected stack: Node.js 26, built-in SQLite, official MCP TypeScript SDK, LangGraph.js, Zod/JSON Schema output validation, and local Ollama HTTP inference. Registration, encounter, observation, custom MCP, graph, approval, audit, and first UI paths are implemented. Ten automated checks pass; `npm.cmd run test:e2e` passed with the actual local model. The one-command startup, approval decision, duplicate guard, and local persistence after restart were verified. Clean-environment verification remains open.
 
 ## Phase 2 — clinical boundary
 
-Add schema validation, protocol versioning, conflict detection, missing-information behavior, and tests proving model output cannot modify deterministic classifications or execute actions.
+Implemented: protocol versioning, missing/invalid-field output, strict schema-constrained model output, deterministic evidence checks, and tests rejecting risk classification, diagnosis, prescription, unsupported history, and unsupported actions. Remaining: broader claim-to-source validation before any model-authored prose, and an approved clinical protocol before any clinical risk feature is considered.
 
 ## Phases 3–5 — MCP, model, approval, audit
 
-Implement and exercise custom MCP tools; integrate a borrowed server only after source/licence review; run the selected open-source orchestrator with an open-weights model; enforce human approvals, authorization, idempotency, and audit integrity.
+Implemented and tested: custom MCP tools, LangGraph flow, live open-weights model execution, schema constraints, practitioner approval, role checks, idempotency, and audit storage. Pending: borrowed MCP server selection/integration and broader audit integrity controls.
 
 ## Phases 6–7 — expansion
 

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f6f5">
+  <title>HealthcareAI2 · Clinical workflow</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="HealthcareAI2 home"><span class="brand-mark">H</span><span>healthcare<span class="brand-light">AI2</span></span></a>
+    <div class="topbar-right"><span class="environment"><i></i> Synthetic demo</span><span id="user-label" class="user-label">Not signed in</span><button id="logout" class="quiet-button hidden">Sign out</button></div>
+  </header>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="sidebar-label">WORKSPACE</div>
+      <a class="nav-item active" href="#workspace"><span class="nav-icon">▦</span> Triage workflow</a>
+      <div class="sidebar-label section-label">SAFETY STATUS</div>
+      <div class="safety-note"><span class="safety-dot"></span><div><strong>Demo protocol</strong><small>Completeness only<br>No clinical thresholds</small></div></div>
+      <div class="sidebar-foot">HealthcareAI2 <span>v0.1 · Local demo</span></div>
+    </aside>
+    <main id="workspace">
+      <section class="page-heading">
+        <div><div class="eyebrow">CLINICAL WORKSPACE <span>/</span> TRIAGE</div><h1>Patient workflow</h1><p>Register a synthetic patient, record observations, and review the agent’s evidence-backed draft.</p></div>
+        <div class="status-chip"><span class="pulse"></span> Local environment</div>
+      </section>
+      <section class="banner"><span class="banner-icon">i</span><p><strong>Decision support demonstration.</strong> The system checks observation completeness only. It does not assign clinical risk, diagnose, or recommend treatment. Practitioner review is required before an alert is published.</p></section>
+
+      <section id="login-card" class="card login-card">
+        <div class="card-heading"><div><span class="step">ACCESS</span><h2>Sign in to the demo</h2><p>Use a synthetic workflow account.</p></div><span class="icon-box">↗</span></div>
+        <form id="login-form" class="form-grid login-grid">
+          <label>Demo account<select name="username"><option value="nurse">Nurse · record observations</option><option value="practitioner">Practitioner · review approvals</option></select></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" required placeholder="Enter demo password"></label>
+          <button class="primary-button" type="submit">Sign in <span>→</span></button>
+        </form>
+        <div class="credentials-hint">Nurse: <code>nurse-demo</code> · Practitioner: <code>practitioner-demo</code></div>
+      </section>
+
+      <div id="app-workflow" class="hidden">
+        <div class="section-title"><div><span class="step">01 — 03</span><h2>Build the encounter</h2></div><span class="tiny-label">SYNTHETIC DATA ONLY</span></div>
+        <div class="workflow-grid">
+          <section class="card">
+            <div class="card-heading"><div><span class="step">01 / REGISTRATION</span><h2>Patient details</h2><p>Create a synthetic patient record.</p></div><span class="icon-box">＋</span></div>
+            <form id="patient-form" class="stack-form">
+              <label>Patient name<input name="name" required maxlength="160" placeholder="Example: Synthetic Patient 001"></label>
+              <div class="form-grid two-col"><label>Date of birth<input name="date_of_birth" type="date" required></label><label>Sex<select name="sex"><option value="unknown">Unknown</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label></div>
+              <button class="secondary-button" type="submit">Register patient <span>→</span></button>
+            </form>
+            <div id="patient-result" class="result-line">No patient registered in this session.</div>
+          </section>
+          <section class="card">
+            <div class="card-heading"><div><span class="step">02 / ENCOUNTER</span><h2>Clinical observations</h2><p>Record the synthetic values for this encounter.</p></div><span class="icon-box">⌁</span></div>
+            <form id="observations-form" class="stack-form">
+              <div class="form-grid two-col">
+                <label>Temperature <span class="unit">°C</span><input name="temperature_c" type="number" step="0.1" placeholder="e.g. 36.8"></label>
+                <label>Heart rate <span class="unit">bpm</span><input name="heart_rate_bpm" type="number" step="1" placeholder="e.g. 72"></label>
+                <label>Respiratory rate <span class="unit">/min</span><input name="respiratory_rate_per_min" type="number" step="1" placeholder="e.g. 16"></label>
+                <label>Systolic BP <span class="unit">mmHg</span><input name="systolic_bp_mmhg" type="number" step="1" placeholder="e.g. 118"></label>
+                <label>Diastolic BP <span class="unit">mmHg</span><input name="diastolic_bp_mmhg" type="number" step="1" placeholder="e.g. 76"></label>
+                <label>Oxygen saturation <span class="unit">%</span><input name="oxygen_saturation_percent" type="number" step="0.1" placeholder="e.g. 98"></label>
+              </div>
+              <button id="record-button" class="secondary-button" type="submit" disabled>Record observations <span>→</span></button>
+            </form>
+            <div id="encounter-result" class="result-line">Register a patient to open an encounter.</div>
+          </section>
+        </div>
+
+        <section class="card run-card">
+          <div class="run-copy"><span class="step">03 / AGENT REVIEW</span><h2>Coordinate a practitioner review</h2><p>The agent retrieves context, runs the deterministic completeness protocol, asks the local model for a neutral draft, and creates an approval request.</p></div>
+          <button id="run-button" class="primary-button" disabled>Run workflow <span>→</span></button>
+        </section>
+
+        <section id="results" class="hidden">
+          <div class="section-title result-title"><div><span class="step">WORKFLOW OUTPUT</span><h2>Evidence and review</h2></div><span id="run-status" class="result-status">Complete</span></div>
+          <div class="workflow-grid">
+            <section class="card output-card"><div class="card-heading"><div><span class="step">DETERMINISTIC ENGINE</span><h2>Observation check</h2></div><span class="status-neutral">No risk classification</span></div><div id="evaluation-output"></div></section>
+            <section class="card output-card"><div class="card-heading"><div><span class="step">OPEN-WEIGHTS MODEL</span><h2>Draft explanation</h2></div><span class="model-badge">Local inference</span></div><div id="model-output"></div></section>
+          </div>
+          <section class="card output-card"><div class="card-heading"><div><span class="step">CUSTOM MCP SERVER</span><h2>Tool execution</h2></div><span id="tool-count" class="model-badge"></span></div><div id="tool-output" class="tool-list"></div></section>
+          <section class="card output-card"><div class="card-heading"><div><span class="step">HUMAN OVERSIGHT</span><h2>Alert approval</h2></div><span id="approval-status" class="status-pending">Awaiting review</span></div><div id="approval-output"></div></section>
+          <section class="card output-card"><div class="card-heading"><div><span class="step">AUDIT TRAIL</span><h2>Recorded events</h2></div><span class="tiny-label">PERSISTED LOCALLY</span></div><div id="audit-output" class="audit-list"></div></section>
+        </section>
+      </div>
+      <div id="toast" role="status" class="toast hidden"></div>
+      <footer>HealthcareAI2 <span>·</span> Synthetic clinical workflow demonstration <span>·</span> Not for clinical use</footer>
+    </main>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

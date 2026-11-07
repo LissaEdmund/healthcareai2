@@ -1,9 +1,9 @@
 # Project overview
 
-HealthcareAI2 is a proposed agentic clinical workflow assistance platform for synthetic hospital workflows, with attention to resource-constrained African hospital settings. It aims to preserve patient and encounter continuity while coordinating information across registration, triage, consultation, laboratory, pharmacy, and closure.
+HealthcareAI2 is an agentic clinical workflow assistance project for synthetic hospital workflows, with attention to resource-constrained African hospital settings. The current implementation is limited to registration, observations, deterministic completeness evaluation, agent-drafted review alert, and practitioner approval. The rest of the patient journey is planned.
 
 The platform is decision support. Recorded facts, patient reports, historical information, unverified results, model-generated interpretations, and practitioner decisions must remain distinguishable. Clinical decisions remain with qualified practitioners.
 
-## Repository baseline
+## Current state
 
-Inspection found an empty source repository on 2026-11-06. The system described here is a target. Its implementation and operational status must be updated as evidence becomes available.
+The initial repository inspection on 2026-11-06 found no implementation. The current stack is Node.js 26, built-in SQLite, LangGraph.js, the official MCP TypeScript SDK, and Ollama HTTP inference. Ten automated tests and the complete local vertical workflow pass. The full hospital journey and clean-machine setup remain outstanding. See the architecture and test-results documents for evidence.

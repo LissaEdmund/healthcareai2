@@ -1,0 +1,21 @@
+{
+  "name": "healthcareai2",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=26.0.0" },
+  "scripts": {
+    "start": "node src/start.js",
+    "start:api": "node src/server.js",
+    "mcp": "node src/mcp-server.js",
+    "test": "node --test",
+    "test:e2e": "node scripts/smoke-workflow.mjs",
+    "test:persistence": "node scripts/verify-persistence.mjs"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.0.0",
+    "@langchain/langgraph": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^4.6.7"
+  }
+}
