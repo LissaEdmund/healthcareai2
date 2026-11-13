@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 let activeUser = null;
 let selectedRecord = null;
 let toastTimer;
+let visitsRefreshTimer;
 const roleNames = { attendant: 'Attendant', nurse: 'Nurse', doctor: 'Doctor', laboratory: 'Laboratory', pharmacist: 'Pharmacist', practitioner: 'Practitioner' };
 const stageNames = { nurse_vitals: 'Nurse observations', doctor_initial: 'Doctor first visit', lab_results: 'Laboratory results', doctor_results: 'Doctor results visit', pharmacy: 'Pharmacy' };
 
@@ -18,11 +19,13 @@ async function request(path, options = {}) {
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]); }
 function showSignedIn(user) {
   activeUser = user;
-  $('#user-label').textContent = `${user.username} · ${roleNames[user.role] ?? user.role}`;
+  $('#user-label').textContent = user.username;
   $('#logout').classList.remove('hidden'); $('#login-card').classList.add('hidden'); $('#department-app').classList.remove('hidden');
   $('#page-title').textContent = `${roleNames[user.role] ?? user.role} workspace`;
   $('#page-subtitle').textContent = roleSubtitle(user.role);
   renderRolePanel(); renderPatientPanel();
+  $('#attendant-nav').classList.toggle('hidden', user.role !== 'attendant');
+  if (user.role === 'attendant') setAttendantPage(location.hash === '#visits' ? 'visits' : 'registration', false);
 }
 function roleSubtitle(role) {
   return ({ attendant: 'Register patients and find existing records.', nurse: 'Select a registered patient and record blood pressure, temperature, and weight.', doctor: 'Review the patient journey and record consultation decisions.', laboratory: 'Review requested tests and enter samples and results.', pharmacist: 'Review medication orders and record dispensing and counseling.', practitioner: 'Review legacy workflow alerts.' })[role] ?? '';
@@ -31,8 +34,9 @@ function renderRolePanel() {
   const panel = $('#role-panel');
   if (activeUser.role === 'attendant') {
     panel.innerHTML = `<div class="card-heading"><div><span class="step">PATIENT REGISTRATION</span><h2>Register a patient</h2><p>A visit record is opened automatically. No encounter number is needed at this desk.</p></div></div>
-      <form id="registration-form" class="stack-form"><label>Patient full name<input name="name" required maxlength="160" placeholder="Patient name"></label><div class="form-grid two-col"><label>Date of birth<input name="date_of_birth" type="date" required></label><label>Sex<select name="sex"><option value="unknown">Unknown</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label></div><button class="primary-button">Register patient</button></form><div id="role-result" class="result-line">Search for an existing patient before creating a new record.</div>`;
+      <form id="registration-form" class="stack-form"><label>Patient full name<input name="name" required maxlength="160" placeholder="Patient name"></label><div class="form-grid two-col"><label>Date of birth<input name="date_of_birth" type="date" required></label><label>Age (years)<input name="age" type="number" min="0" max="130" readonly placeholder="Calculated from date of birth"></label><label>Sex<select name="sex"><option value="female">Female</option><option value="male">Male</option></select></label></div><button class="primary-button">Register patient</button></form><div id="role-result" class="result-line">Search for an existing patient before creating a new record.</div>`;
     $('#registration-form').addEventListener('submit', registerPatient);
+    $('#registration-form [name="date_of_birth"]').addEventListener('input', updateRegistrationAge);
   } else if (activeUser.role === 'practitioner') {
     panel.innerHTML = `<div class="card-heading"><div><span class="step">LEGACY REVIEW</span><h2>Practitioner review</h2><p>The original completeness workflow remains available through the previous demo API. Department screens are focused on the synthetic journey.</p></div></div>`;
   } else {
@@ -40,13 +44,59 @@ function renderRolePanel() {
   }
 }
 function renderPatientPanel() {
-  $('#patient-panel').innerHTML = `<div class="card-heading"><div><span class="step">PATIENT LOOKUP</span><h2>Search registered patients</h2><p>Enter at least two characters of the patient name.</p></div></div><label>Patient name<input id="patient-search" autocomplete="off" placeholder="Search by name"></label><div id="search-results" class="patient-results"></div>`;
+  if (activeUser.role === 'nurse') {
+    $('#patient-panel').classList.add('hidden');
+    $('.role-layout').classList.add('nurse-layout');
+    $('#nurse-queue').classList.remove('hidden');
+    loadNurseQueue();
+    return;
+  }
+  $('.role-layout').classList.remove('nurse-layout');
+  $('#patient-panel').classList.remove('hidden');
+  $('#nurse-queue').classList.add('hidden');
+  $('#patient-panel').innerHTML = `<div class="card-heading"><div><span class="step">PATIENT LOOKUP</span><h2>Search registered patients</h2><p>Enter at least two characters, then open a visit from the result.</p></div></div><label>Patient name<input id="patient-search" autocomplete="off" placeholder="Search by name"></label><div id="search-results" class="patient-results"></div>`;
   let debounce;
   $('#patient-search').addEventListener('input', () => {
     clearTimeout(debounce);
     const query = $('#patient-search').value.trim();
     debounce = setTimeout(() => searchPatients(query), 200);
   });
+  if (activeUser.role === 'attendant') loadTodayVisits();
+}
+async function loadNurseQueue() {
+  const panel = $('#nurse-queue');
+  if (!panel || activeUser?.role !== 'nurse') return;
+  try {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
+    const { visits } = await request(`/api/attendant/today-visits?${query}`);
+    const enrichedVisits = await Promise.all(visits.map(async (visit) => {
+      const patientRecord = await request(`/api/patients/${visit.patient_id}/record`);
+      const encounter = patientRecord.encounters.find((item) => item.id === visit.id);
+      const nurseStage = encounter?.stages.find((item) => item.stage === 'nurse_vitals');
+      return { ...visit, nurse_vitals_recorded: Boolean(nurseStage), risk_level: nurseStage ? nurseRiskLevel(visit.date_of_birth, nurseStage.data) : null };
+    }));
+    const patients = enrichedVisits.filter((visit) => !visit.nurse_vitals_recorded);
+    const recorded = enrichedVisits.filter((visit) => visit.nurse_vitals_recorded);
+    panel.innerHTML = `<div class="card-heading"><div><span class="step">NURSE WORKLIST</span><h2>Patient observations</h2><p>Record vital signs for new visits, then review or edit saved records.</p></div><button type="button" class="secondary-button refresh-nurse-queue">Refresh</button></div><section class="nurse-list-section"><div class="section-title"><div><span class="step">TO RECORD</span><h2>New visit patients</h2></div></div>${nurseVisitTable(patients, false)}</section><section class="nurse-list-section"><div class="section-title"><div><span class="step">RECORDED</span><h2>Patients with recorded vitals</h2></div></div>${nurseVisitTable(recorded, true)}</section>`;
+    panel.querySelector('.refresh-nurse-queue')?.addEventListener('click', loadNurseQueue);
+    panel.querySelectorAll('.select-nurse-patient, .edit-nurse-patient').forEach((button) => button.addEventListener('click', () => selectPatient(button.dataset.patient, button.dataset.encounter)));
+  } catch (error) { notify(error.message, true); }
+}
+function nurseRiskLevel(dateOfBirth, vitals) {
+  const age = ageFromDob(dateOfBirth);
+  const adult = typeof age === 'number' && age >= 18;
+  const highTemperature = vitals.temperature_c < 36 || vitals.temperature_c > 39;
+  const highAdultBp = adult && (vitals.systolic_bp_mmhg >= 180 || vitals.diastolic_bp_mmhg >= 120);
+  if (highTemperature || highAdultBp) return 'High';
+  const raisedTemperature = vitals.temperature_c >= 38;
+  const raisedAdultBp = adult && (vitals.systolic_bp_mmhg >= 140 || vitals.diastolic_bp_mmhg >= 90);
+  if (raisedTemperature || raisedAdultBp) return 'Medium';
+  return 'Normal';
+}
+function nurseVisitTable(visits, recorded) {
+  return `<div class="table-scroll"><table class="visits-table"><thead><tr><th>Patient name</th><th>Date of birth</th><th>Age</th><th>Sex</th><th>Visit opened</th><th>Status</th>${recorded ? '<th>Risk level</th>' : ''}<th></th></tr></thead><tbody>${visits.length ? visits.map((patient) => `<tr><td>${escapeHtml(patient.name)}</td><td>${escapeHtml(patient.date_of_birth)}</td><td>${ageFromDob(patient.date_of_birth)}</td><td>${escapeHtml(patient.sex)}</td><td>${escapeHtml(new Date(patient.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }))}</td><td><span class="visit-status ${recorded ? 'closed' : 'open'}">${recorded ? 'Recorded' : 'To record'}</span></td>${recorded ? `<td><span class="risk-level risk-${String(patient.risk_level ?? 'Normal').toLowerCase()}">${escapeHtml(patient.risk_level ?? 'Normal')}</span></td>` : ''}<td><button type="button" class="secondary-button ${recorded ? 'edit-nurse-patient' : 'select-nurse-patient'}" data-patient="${escapeHtml(patient.patient_id)}" data-encounter="${escapeHtml(patient.id)}">${recorded ? 'View / edit' : 'Record vitals'}</button></td></tr>`).join('') : `<tr><td colspan="${recorded ? 8 : 7}" class="empty-visits">${recorded ? 'No observations have been saved today.' : 'No new visits are waiting for observations.'}</td></tr>`}</tbody></table></div>`;
 }
 async function searchPatients(query) {
   const target = $('#search-results');
@@ -54,25 +104,82 @@ async function searchPatients(query) {
   if (query.length < 2) { target.innerHTML = ''; return; }
   try {
     const { patients } = await request(`/api/patients?q=${encodeURIComponent(query)}`);
-    target.innerHTML = patients.length ? patients.map((patient) => `<button class="patient-option" type="button" data-patient="${escapeHtml(patient.id)}"><strong>${escapeHtml(patient.name)}</strong><small>${escapeHtml(patient.date_of_birth)} · ${escapeHtml(patient.sex)} · ${patient.latest_encounter_id ? 'Visit on file' : 'No visit yet'}</small></button>`).join('') : '<div class="result-line">No matching patient found.</div>';
-    target.querySelectorAll('[data-patient]').forEach((button) => button.addEventListener('click', () => selectPatient(button.dataset.patient)));
+    target.innerHTML = patients.length ? patients.map((patient) => activeUser.role === 'attendant'
+      ? `<div class="patient-option"><span><strong>${escapeHtml(patient.name)}</strong><small>${escapeHtml(patient.date_of_birth)} · ${escapeHtml(patient.sex)}</small></span><button class="secondary-button open-visit-button" type="button" data-patient="${escapeHtml(patient.id)}">Open new visit</button></div>`
+      : `<button class="patient-option" type="button" data-patient="${escapeHtml(patient.id)}"><strong>${escapeHtml(patient.name)}</strong><small>${escapeHtml(patient.date_of_birth)} · ${escapeHtml(patient.sex)} · ${patient.latest_encounter_id ? 'Visit on file' : 'No visit yet'}</small></button>`).join('') : '<div class="result-line">No matching patient found.</div>';
+    target.querySelectorAll('[data-patient]').forEach((button) => button.addEventListener('click', () => activeUser.role === 'attendant' ? openNewVisit(button.dataset.patient) : selectPatient(button.dataset.patient)));
   } catch (error) { notify(error.message, true); }
 }
-async function selectPatient(patientId) {
+function updateRegistrationAge() {
+  const dobValue = $('#registration-form [name="date_of_birth"]').value;
+  const ageField = $('#registration-form [name="age"]');
+  if (!dobValue) { ageField.value = ''; return; }
+  const dob = new Date(`${dobValue}T00:00:00`), today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  if (today.getMonth() < dob.getMonth() || (today.getMonth() === dob.getMonth() && today.getDate() < dob.getDate())) age--;
+  ageField.value = age >= 0 ? age : '';
+}
+async function loadTodayVisits() {
+  const panel = $('#today-visits');
+  if (!panel || activeUser?.role !== 'attendant') return;
+  try {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
+    const { visits } = await request(`/api/attendant/today-visits?${query}`);
+    panel.innerHTML = `<div class="card-heading"><div><span class="step">TODAY</span><h2>New visit patients</h2><p>${visits.length} visit(s) opened today.</p></div><button type="button" class="secondary-button refresh-visits">Refresh</button></div><div class="table-scroll"><table class="visits-table"><thead><tr><th>Patient name</th><th>Date of birth</th><th>Age</th><th>Sex</th><th>Visit opened</th><th>Status</th></tr></thead><tbody>${visits.length ? visits.map((visit) => `<tr><td>${escapeHtml(visit.name)}</td><td>${escapeHtml(visit.date_of_birth)}</td><td>${ageFromDob(visit.date_of_birth)}</td><td>${escapeHtml(visit.sex)}</td><td>${escapeHtml(new Date(visit.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</td><td><span class="visit-status ${visit.status === 'complete' ? 'closed' : 'open'}">${visit.status === 'complete' ? 'Closed' : 'Open'}</span></td></tr>`).join('') : '<tr><td colspan="6" class="empty-visits">No new visits opened today.</td></tr>'}</tbody></table></div>`;
+    panel.querySelector('.refresh-visits')?.addEventListener('click', loadTodayVisits);
+  } catch (error) { notify(error.message, true); }
+}
+function setAttendantPage(page, updateHash = true) {
+  const visitsPage = page === 'visits';
+  document.querySelector('.role-layout')?.classList.toggle('hidden', visitsPage);
+  $('#today-visits')?.classList.toggle('hidden', !visitsPage);
+  $('#attendant-nav')?.querySelectorAll('[data-attendant-page]').forEach((button) => button.classList.toggle('active', button.dataset.attendantPage === page));
+  if (updateHash) history.replaceState(null, '', visitsPage ? '#visits' : location.pathname);
+  clearInterval(visitsRefreshTimer);
+  visitsRefreshTimer = visitsPage ? setInterval(() => { if (!document.hidden) loadTodayVisits(); }, 15000) : null;
+  if (visitsPage) loadTodayVisits();
+}
+$('#attendant-nav').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-attendant-page]');
+  if (button) setAttendantPage(button.dataset.attendantPage);
+});
+function ageFromDob(value) {
+  const dob = new Date(`${value}T00:00:00`), today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  if (today.getMonth() < dob.getMonth() || (today.getMonth() === dob.getMonth() && today.getDate() < dob.getDate())) age--;
+  return age >= 0 ? age : '—';
+}
+async function openNewVisit(patientId) {
+  try {
+    await request(`/api/patients/${patientId}/encounters`, { method: 'POST', body: '{}' });
+    setAttendantPage('visits');
+    await loadTodayVisits();
+    notify('New visit opened and added to today’s visit list.');
+  } catch (error) { notify(error.message, true); }
+}
+async function selectPatient(patientId, encounterId = null) {
   try {
     selectedRecord = await request(`/api/patients/${patientId}/record`);
+    if (encounterId) {
+      const index = selectedRecord.encounters.findIndex((encounter) => encounter.id === encounterId);
+      if (index > 0) selectedRecord.encounters.unshift(selectedRecord.encounters.splice(index, 1)[0]);
+    }
     const latest = selectedRecord.encounters[0];
     if (!latest && activeUser.role !== 'attendant') throw new Error('This patient has no visit record yet. Ask the attendant to register the visit.');
-    $('#patient-details').classList.remove('hidden');
+    if (activeUser.role === 'nurse') $('#patient-details').classList.add('hidden');
+    else $('#patient-details').classList.remove('hidden');
     $('#agent-output').classList.add('hidden');
-    renderPatientDetail(); renderRoleAction();
+    if (activeUser.role !== 'nurse') renderPatientDetail();
+    renderRoleAction();
     const stages = latestStages();
     const currentStage = activeUser.role === 'nurse' ? 'nurse_vitals'
       : activeUser.role === 'laboratory' ? 'lab_results'
         : activeUser.role === 'pharmacist' ? 'pharmacy'
           : activeUser.role === 'doctor' ? (stages.has('doctor_results') ? 'doctor_results' : 'doctor_initial') : null;
     const savedReview = currentStage ? stages.get(currentStage)?.data?._assistant_review : null;
-    if (savedReview) renderAgentOutput(currentStage, savedReview, false);
+    if (savedReview && activeUser.role !== 'nurse') renderAgentOutput(currentStage, savedReview, false);
   } catch (error) { notify(error.message, true); }
 }
 function latestEncounter() { return selectedRecord?.encounters?.[0] ?? null; }
@@ -108,7 +215,7 @@ function renderRoleAction() {
   if (activeUser.role === 'nurse') {
     const saved = stages.get('nurse_vitals');
     target.innerHTML = `${saved ? `<div class="saved-data"><strong>Saved observations</strong><pre>${escapeHtml(JSON.stringify(Object.fromEntries(Object.entries(saved.data).filter(([key]) => key !== '_assistant_review')), null, 2))}</pre></div>` : ''}
-      <form id="nurse-form" class="stack-form"><div class="form-grid two-col"><label>Systolic blood pressure <span class="unit">mmHg</span><input name="systolic_bp_mmhg" type="number" min="1" required></label><label>Diastolic blood pressure <span class="unit">mmHg</span><input name="diastolic_bp_mmhg" type="number" min="1" required></label><label>Temperature <span class="unit">°C</span><input name="temperature_c" type="number" min="1" step="0.1" required></label><label>Weight <span class="unit">kg</span><input name="weight_kg" type="number" min="1" step="0.1" required></label></div><button class="primary-button">Save observations</button></form>`;
+      <form id="nurse-form" class="stack-form"><div class="form-grid two-col"><label>Systolic blood pressure <span class="unit">mmHg</span><input name="systolic_bp_mmhg" type="number" min="1" value="${escapeHtml(saved?.data?.systolic_bp_mmhg ?? '')}" required></label><label>Diastolic blood pressure <span class="unit">mmHg</span><input name="diastolic_bp_mmhg" type="number" min="1" value="${escapeHtml(saved?.data?.diastolic_bp_mmhg ?? '')}" required></label><label>Temperature <span class="unit">°C</span><input name="temperature_c" type="number" min="1" step="0.1" value="${escapeHtml(saved?.data?.temperature_c ?? '')}" required></label><label>Weight <span class="unit">kg</span><input name="weight_kg" type="number" min="1" step="0.1" value="${escapeHtml(saved?.data?.weight_kg ?? '')}" required></label></div><button class="primary-button">${saved ? 'Save changes' : 'Save observations'}</button></form>`;
     $('#nurse-form').addEventListener('submit', (event) => saveStage(event, 'nurse_vitals', ['systolic_bp_mmhg', 'diastolic_bp_mmhg', 'temperature_c', 'weight_kg'], true));
     return;
   }
@@ -176,13 +283,13 @@ function renderRoleAction() {
     target.innerHTML = `${order ? `<div class="saved-data"><strong>Doctor's medication order</strong><pre>${escapeHtml(order.data.medication_order)}</pre></div><form id="pharmacy-form" class="stack-form"><div class="medicine-rows">${orderedItems.map((item, index) => {
       const prior = savedRows[index] ?? {};
       return `<div class="medicine-row" data-index="${index}"><div><strong>${escapeHtml(item)}</strong><small>As written by the doctor</small></div><label>Availability<select class="medicine-availability"><option value="available" ${prior.availability === 'available' ? 'selected' : ''}>Available</option><option value="unavailable" ${prior.availability === 'unavailable' ? 'selected' : ''}>Unavailable</option></select></label><label>Quantity supplied<input class="medicine-quantity" value="${escapeHtml(prior.quantity ?? '')}" placeholder="As ordered"></label><label class="substitute-label ${prior.availability === 'unavailable' ? '' : 'hidden'}">Pharmacist selected alternative<input class="medicine-substitute" value="${escapeHtml(prior.substitute ?? '')}"></label></div>`;
-    }).join('')}</div><label>Instructions explained to the patient<textarea name="instructions" rows="3" required>${escapeHtml(saved?.data?.instructions ?? '')}</textarea></label><button class="primary-button">Complete dispensing and patient journey</button></form>` : '<p class="result-line">No doctor medication order has been received.</p>'}`;
+    }).join('')}</div><label>Instructions explained to the patient<textarea name="instructions" rows="3" required>${escapeHtml(saved?.data?.instructions ?? '')}</textarea></label><label>Has the patient received the medicine?<select name="medicine_received" required><option value="">Confirm after handoff</option><option value="yes" ${saved?.data?.medicine_received === 'yes' ? 'selected' : ''}>Yes, medicine given to patient</option><option value="no" ${saved?.data?.medicine_received === 'no' ? 'selected' : ''}>No, medicine not received</option></select></label><button class="primary-button">Save dispensing and handoff</button></form>` : '<p class="result-line">No doctor medication order has been received.</p>'}`;
     if (order) {
       $('#pharmacy-form').querySelectorAll('.medicine-availability').forEach((select) => select.addEventListener('change', () => select.closest('.medicine-row').querySelector('.substitute-label').classList.toggle('hidden', select.value !== 'unavailable')));
       $('#pharmacy-form').addEventListener('submit', (event) => {
       const items = [...$('#pharmacy-form').querySelectorAll('.medicine-row')].map((element) => ({ ordered_item: element.querySelector('strong').textContent, availability: element.querySelector('.medicine-availability').value, quantity: element.querySelector('.medicine-quantity').value.trim(), substitute: element.querySelector('.medicine-substitute').value.trim() }));
       if (items.some((item) => item.availability === 'available' && !item.quantity || item.availability === 'unavailable' && !item.substitute)) { event.preventDefault(); notify('Enter the quantity supplied or the pharmacist-selected alternative for each medicine.', true); return; }
-        const fields = { dispensed: JSON.stringify(items), substitutions: JSON.stringify(items.filter((item) => item.availability === 'unavailable')), instructions: new FormData(event.currentTarget).get('instructions') };
+        const fields = { dispensed: JSON.stringify(items), substitutions: JSON.stringify(items.filter((item) => item.availability === 'unavailable')), instructions: new FormData(event.currentTarget).get('instructions'), medicine_received: new FormData(event.currentTarget).get('medicine_received') };
         saveStage(event, 'pharmacy', Object.keys(fields), false, fields);
       });
     }
@@ -195,15 +302,28 @@ async function saveStage(event, stage, fields, numeric = false, override = null)
   if (numeric) for (const key of Object.keys(data)) data[key] = Number(data[key]);
   try {
     const result = await request(`/api/encounters/${latestEncounter().id}/stages/${stage}`, { method: 'POST', body: JSON.stringify(data) });
+    if (stage === 'nurse_vitals') {
+      selectedRecord = null;
+      $('#patient-details').classList.add('hidden');
+      $('#agent-output').classList.add('hidden');
+      await loadNurseQueue();
+      notify('Vitals saved. The patient moved to Patients with recorded vitals.');
+      return;
+    }
     await selectPatient(selectedRecord.patient.id);
     renderAgentOutput(stage, result.assistant_review);
-    notify('Information saved and sent to the next department.');
+    notify(stage === 'pharmacy' ? (data.medicine_received === 'yes' ? 'Medicine handoff confirmed; the visit is closed.' : 'Dispensing saved; the visit remains open until medicine is received.') : 'Information saved and sent to the next department.');
   } catch (error) { notify(error.message, true); }
 }
 function renderAgentOutput(stage, review, shouldScroll = true) {
   const target = $('#agent-output'); target.classList.remove('hidden');
-  target.classList.toggle('urgent-review', review?.status === 'urgent_clinician_review_prompt');
-  target.innerHTML = `<div class="card-heading"><div><span class="step">WORKFLOW STATUS · ${escapeHtml(stageNames[stage] ?? stage)}</span><h2>${escapeHtml(review?.status ?? 'Saved')}</h2></div></div><p>${escapeHtml(review?.message ?? 'The entry has been saved to the patient record.')}</p>${review?.source ? `<p><a href="${escapeHtml(review.source.url)}" target="_blank" rel="noreferrer">${escapeHtml(review.source.title)}</a></p>` : ''}`;
+  const riskLevel = review?.risk_level ?? (review?.status === 'urgent_clinician_review_prompt' ? 'High' : 'Normal');
+  target.classList.toggle('urgent-review', stage === 'nurse_vitals' && riskLevel === 'High');
+  if (stage === 'nurse_vitals') {
+    target.innerHTML = `<div class="card-heading"><div><span class="step">RISK LEVEL</span><h2 class="risk-level risk-${riskLevel.toLowerCase()}">${escapeHtml(riskLevel)}</h2></div></div>`;
+  } else {
+    target.innerHTML = `<div class="card-heading"><div><span class="step">WORKFLOW STATUS · ${escapeHtml(stageNames[stage] ?? stage)}</span><h2>${escapeHtml(review?.status ?? 'Saved')}</h2></div></div><p>${escapeHtml(review?.message ?? 'The entry has been saved to the patient record.')}</p>${review?.source ? `<p><a href="${escapeHtml(review.source.url)}" target="_blank" rel="noreferrer">${escapeHtml(review.source.title)}</a></p>` : ''}`;
+  }
   if (shouldScroll) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 async function registerPatient(event) {
@@ -217,6 +337,7 @@ async function registerPatient(event) {
     $('#role-result').innerHTML = `Registered <strong>${escapeHtml(result.patient.name)}</strong>. The visit has been opened for the nurse.`;
     form.reset();
     const search = $('#patient-search'); search.value = values.name; await searchPatients(values.name);
+    await loadTodayVisits();
     notify('Patient registered and sent to the nurse queue.');
   } catch (error) { notify(error.message, true); }
 }

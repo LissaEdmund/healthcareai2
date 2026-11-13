@@ -97,6 +97,20 @@ function patientRecord(patientId) {
   }));
   return { patient, encounters };
 }
+function nurseVitalsRiskLevel(dateOfBirth, vitals) {
+  const dob = new Date(`${dateOfBirth}T00:00:00Z`);
+  const today = new Date();
+  let ageYears = today.getUTCFullYear() - dob.getUTCFullYear();
+  if (today.getUTCMonth() < dob.getUTCMonth() || (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() < dob.getUTCDate())) ageYears--;
+  const adult = ageYears >= 18;
+  const highTemperature = vitals.temperature_c < 36 || vitals.temperature_c > 39;
+  const highAdultBp = adult && (vitals.systolic_bp_mmhg >= 180 || vitals.diastolic_bp_mmhg >= 120);
+  if (highTemperature || highAdultBp) return 'High';
+  const raisedTemperature = vitals.temperature_c >= 38;
+  const raisedAdultBp = adult && (vitals.systolic_bp_mmhg >= 140 || vitals.diastolic_bp_mmhg >= 90);
+  if (raisedTemperature || raisedAdultBp) return 'Medium';
+  return 'Normal';
+}
 
 async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/me') {
@@ -124,6 +138,21 @@ async function api(req, res, url) {
       (SELECT e.id FROM encounters e WHERE e.patient_id = p.id ORDER BY e.created_at DESC LIMIT 1) AS latest_encounter_id
       FROM patients p WHERE p.name LIKE ? COLLATE NOCASE ORDER BY p.name LIMIT 25`, `%${query}%`);
     return json(res, 200, { patients: matches });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/attendant/today-visits') {
+    requireRole(auth(req), ['attendant', 'nurse']);
+    const start = url.searchParams.get('start');
+    const end = url.searchParams.get('end');
+    if (!start || !end || !Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.parse(start)) return json(res, 400, { error: 'Provide valid local-day start and end times' });
+    const visitRows = rows(`SELECT e.id, e.patient_id, e.status, e.created_at, p.name, p.date_of_birth, p.sex
+      FROM encounters e JOIN patients p ON p.id = e.patient_id
+      WHERE e.created_at >= ? AND e.created_at < ? ORDER BY e.created_at DESC`, new Date(start).toISOString(), new Date(end).toISOString());
+    const visits = visitRows.map((visit) => {
+      const record = row('SELECT payload FROM encounter_stages WHERE encounter_id = ? AND stage = ?', visit.id, 'nurse_vitals');
+      const data = record ? JSON.parse(record.payload) : null;
+      return { ...visit, nurse_vitals_recorded: Boolean(record), risk_level: data ? nurseVitalsRiskLevel(visit.date_of_birth, data) : null };
+    });
+    return json(res, 200, { visits });
   }
   const patientRecordMatch = url.pathname.match(/^\/api\/patients\/([0-9a-f-]+)\/record$/i);
   if (req.method === 'GET' && patientRecordMatch) {
@@ -223,7 +252,7 @@ async function api(req, res, url) {
       doctor_initial: ['symptoms', 'suspected_conditions', 'risk_factors', 'exam_notes', 'test_request', 'recommendation_review_id'],
       lab_results: ['tests_received', 'specimen', 'results', 'result_notes'],
       doctor_results: ['assessment', 'medication_order', 'ai_medication_review'],
-      pharmacy: ['dispensed', 'instructions', 'substitutions']
+      pharmacy: ['dispensed', 'instructions', 'substitutions', 'medicine_received']
     }[stageId];
     const invalid = Object.entries(input).some(([key, value]) => !allowedFields.includes(key) || (typeof value !== 'string' && typeof value !== 'number') || (typeof value === 'string' && value.length > 5000) || (typeof value === 'number' && !Number.isFinite(value)));
     if (invalid) return json(res, 400, { error: 'Enter supported text or numeric fields' });
@@ -234,9 +263,10 @@ async function api(req, res, url) {
       doctor_initial: ['symptoms', 'suspected_conditions', 'test_request', 'recommendation_review_id'],
       lab_results: ['tests_received', 'specimen', 'results'],
       doctor_results: ['assessment', 'medication_order'],
-      pharmacy: ['dispensed', 'instructions']
+      pharmacy: ['dispensed', 'instructions', 'medicine_received']
     }[stageId];
     if (requiredByStage.some((key) => input[key] === undefined || String(input[key]).trim() === '')) return json(res, 400, { error: `Complete required fields: ${requiredByStage.join(', ')}` });
+    if (stageId === 'pharmacy' && !['yes', 'no'].includes(input.medicine_received)) return json(res, 400, { error: 'Confirm whether the patient received the medicine' });
     if (stageId === 'nurse_vitals' && (input.systolic_bp_mmhg <= 0 || input.diastolic_bp_mmhg <= 0 || input.temperature_c <= 0 || input.weight_kg <= 0)) return json(res, 400, { error: 'Vital sign values must be positive numbers' });
     if (stageId === 'doctor_initial') {
       const review = row('SELECT output_json, input_json FROM agent_reviews WHERE id = ? AND encounter_id = ? AND stage = ? AND actor = ?', input.recommendation_review_id, encounterId, 'doctor_initial', session.username);
@@ -251,11 +281,12 @@ async function api(req, res, url) {
     const dob = new Date(`${stageEncounter.date_of_birth}T00:00:00Z`);
     let ageYears = today.getUTCFullYear() - dob.getUTCFullYear();
     if (today.getUTCMonth() < dob.getUTCMonth() || (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() < dob.getUTCDate())) ageYears -= 1;
-    const highAdultBp = stageId === 'nurse_vitals' && ageYears >= 18 && (input.systolic_bp_mmhg >= 180 || input.diastolic_bp_mmhg >= 120);
+    const nurseRiskLevel = stageId === 'nurse_vitals' ? nurseVitalsRiskLevel(stageEncounter.date_of_birth, input) : null;
+    const highTemperature = stageId === 'nurse_vitals' && (input.temperature_c < 36 || input.temperature_c > 39);
     const stageOutputs = {
-      nurse_vitals: highAdultBp
-        ? { status: 'urgent_clinician_review_prompt', message: 'Recorded adult blood pressure is at or above 180 systolic or 120 diastolic. WHO describes this as very high blood pressure (usually 180/120 or higher). Repeat/confirm the reading and alert the doctor immediately for clinical assessment; assess for symptoms such as chest pain, breathing difficulty, severe headache, confusion, vomiting, or vision change. This is a review prompt, not a diagnosis or complete emergency assessment.', source: { title: 'WHO hypertension fact sheet', url: 'https://www.who.int/news-room/fact-sheets/detail/hypertension' } }
-        : { status: ageYears >= 18 ? 'not_clinically_assessed' : 'adult_threshold_not_applicable', message: ageYears >= 18 ? 'Vitals saved. No high-BP review prompt matched this limited draft rule; this does not mean the patient is normal or rule out urgency. A clinician must assess the patient.' : 'Vitals saved. Adult BP draft rule was not applied to this age group; pediatric assessment is required.' },
+      nurse_vitals: nurseRiskLevel === 'High'
+        ? { status: 'urgent_clinician_review_prompt', risk_level: nurseRiskLevel, message: highTemperature ? 'Recorded temperature is below 36°C or above 39°C, a high-risk vital sign in the WHO Interagency Integrated Triage Tool.' : 'Recorded adult blood pressure is at or above 180 systolic or 120 diastolic, a very high reading that needs prompt clinical review.', source: highTemperature ? { title: 'WHO Interagency Integrated Triage Tool', url: 'https://cdn.who.int/media/docs/default-source/integrated-health-services-%28ihs%29/csy/general-scf-ref-card.pdf' } : { title: 'WHO hypertension fact sheet', url: 'https://www.who.int/news-room/fact-sheets/detail/hypertension' } }
+        : { status: ageYears >= 18 ? 'not_clinically_assessed' : 'adult_threshold_not_applicable', risk_level: nurseRiskLevel, message: 'Vitals saved. Risk level is a limited screen based only on the recorded blood pressure and temperature.' },
       doctor_initial: { status: 'clinician_review_required', message: 'WHO-based test suggestions are drafts only. The doctor has reviewed and edited the final test request before handoff.' },
       lab_results: { status: 'results_recorded', message: 'Results saved to the encounter for doctor review.' },
       doctor_results: { status: 'clinician_review_required', message: 'The clinician assessment and medication order are saved. WHO AWaRe infection guidance is not sufficient to select a patient-specific medicine/dose here: allergy, pregnancy, renal/liver status, diagnosis, and the hospital formulary are not available. No medicine or dose suggestion was generated.', source: { title: 'WHO AWaRe antibiotic book', url: 'https://www.who.int/publications/i/item/9789240062382' } },
@@ -276,7 +307,10 @@ async function api(req, res, url) {
     }
     run('INSERT INTO encounter_stages (id, encounter_id, stage, payload, recorded_by, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(encounter_id, stage) DO UPDATE SET payload=excluded.payload, recorded_by=excluded.recorded_by, created_at=excluded.created_at', randomUUID(), encounterId, stageId, JSON.stringify(input), session.username, created);
     audit(session.username, 'workflow_stage_recorded', 'encounter', encounterId, { stage: stageId, fields: Object.keys(input) });
-    run('UPDATE encounters SET status = ? WHERE id = ?', workflowStages[workflowStages.indexOf(stage) + 1]?.id ?? 'complete', encounterId);
+    const nextEncounterStatus = stageId === 'pharmacy'
+      ? (input.medicine_received === 'yes' ? 'complete' : 'pharmacy')
+      : workflowStages[workflowStages.indexOf(stage) + 1]?.id ?? 'complete';
+    run('UPDATE encounters SET status = ? WHERE id = ?', nextEncounterStatus, encounterId);
     return json(res, 201, { stage: stageId, recorded_at: created, recorded_by: session.username, assistant_review: stageOutputs[stageId] });
   }
   const workflowMatch = url.pathname.match(/^\/api\/encounters\/([0-9a-f-]+)\/run$/i);
@@ -327,7 +361,15 @@ async function staticFile(req, res, pathname) {
     const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
     res.writeHead(200, { 'content-type': types[extname(fullPath)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
     res.end(content);
-  } catch { json(res, 404, { error: 'Not found' }); }
+  } catch {
+    if (req.headers.accept?.includes('text/html')) {
+      const index = await readFile(resolve(frontendRoot, 'index.html'));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
+      res.end(index);
+      return;
+    }
+    json(res, 404, { error: 'Not found' });
+  }
 }
 
 const server = createServer(async (req, res) => {

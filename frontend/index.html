@@ -10,11 +10,10 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/" aria-label="HealthcareAI2 home"><span class="brand-mark">H</span><span>healthcare<span class="brand-light">AI2</span></span></a>
-    <div class="topbar-right"><span class="environment"><i></i> Synthetic demo</span><span id="user-label" class="user-label">Not signed in</span><button id="logout" class="quiet-button hidden">Sign out</button></div>
+    <div class="topbar-right"><span class="environment"><i></i> Local environment</span><span id="user-label" class="user-label">Not signed in</span><button id="logout" class="quiet-button hidden">Sign out</button></div>
   </header>
   <main class="role-main">
-    <section class="page-heading"><div><div id="role-eyebrow" class="eyebrow">HOSPITAL WORKFLOW</div><h1 id="page-title">Sign in to HealthcareAI2</h1><p id="page-subtitle">Synthetic patient journey demonstration.</p></div><div class="status-chip"><span class="pulse"></span> Local environment</div></section>
-    <section class="banner safety-banner"><span class="banner-icon">i</span><p><strong>Clinician-review drafts.</strong> Limited WHO rules can suggest malaria/UTI tests and flag a very high adult blood pressure for prompt clinician review. These drafts are not diagnoses or a full severity assessment. Medicine/dose/substitution suggestions remain unavailable without a hospital formulary and more patient-specific safety data.</p></section>
+    <section class="page-heading"><div><div id="role-eyebrow" class="eyebrow">HOSPITAL WORKFLOW</div><h1 id="page-title">Sign in to HealthcareAI2</h1><p id="page-subtitle">Synthetic patient journey demonstration.</p></div></section>
     <section id="login-card" class="card login-card">
       <div class="card-heading"><div><span class="step">ACCESS</span><h2>Sign in to your department</h2><p>Select a synthetic demo role.</p></div></div>
       <form id="login-form" class="form-grid login-grid">
@@ -25,11 +24,14 @@
       <div class="credentials-hint">Demo passwords: attendant-demo · nurse-demo · doctor-demo · laboratory-demo · pharmacist-demo</div>
     </section>
     <section id="department-app" class="hidden">
+      <nav id="attendant-nav" class="attendant-nav hidden" aria-label="Attendant pages"><button type="button" class="active" data-attendant-page="registration">Registration</button><button type="button" data-attendant-page="visits">New visit patients</button></nav>
       <div class="role-layout">
         <section id="role-panel" class="card role-panel"></section>
         <section id="patient-panel" class="card patient-panel"></section>
       </div>
+      <section id="nurse-queue" class="card hidden"></section>
       <section id="patient-details" class="card hidden"></section>
+      <section id="today-visits" class="card hidden"></section>
       <section id="agent-output" class="card hidden"></section>
     </section>
     <div id="toast" role="status" class="toast hidden"></div>
