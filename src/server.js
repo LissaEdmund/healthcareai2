@@ -4,7 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { extname, isAbsolute, relative, resolve } from 'node:path';
 import { db, row, rows, run, audit } from './db.js';
 import { REQUIRED_OBSERVATIONS } from './protocol.js';
-import { runWorkflow } from './orchestrator.js';
+import { explainNurseVitalsReview, runWorkflow } from './orchestrator.js';
 import { buildTestDraft } from './recommendations.js';
 
 const host = process.env.HOST ?? '127.0.0.1';
@@ -297,6 +297,18 @@ async function api(req, res, url) {
       stageOutputs.doctor_initial = draft.recommendations.length
         ? { status: 'clinician_review_required', message: 'WHO guideline test suggestions were stored alongside the doctor-edited laboratory request. They are drafts, not a diagnosis.' }
         : { status: 'no_rule_matched', message: 'No configured WHO test draft rule matched the clinician-entered condition(s). The doctor’s test request is saved for laboratory handoff.' };
+    }
+    if (stageId === 'nurse_vitals') {
+      audit(session.username, 'nurse_vitals_ai_review_started', 'encounter', encounterId, { risk_level: nurseRiskLevel });
+      try {
+        const explanation = await explainNurseVitalsReview(input, nurseRiskLevel, stageOutputs.nurse_vitals.message);
+        stageOutputs.nurse_vitals.ai_explanation = explanation.explanation;
+        stageOutputs.nurse_vitals.ai_model = explanation.model;
+        audit(session.username, 'nurse_vitals_ai_review_completed', 'encounter', encounterId, { risk_level: nurseRiskLevel, model: explanation.model });
+      } catch (error) {
+        audit(session.username, 'nurse_vitals_ai_review_failed', 'encounter', encounterId, { risk_level: nurseRiskLevel, error: error.message });
+        throw Object.assign(new Error(`Vitals were not saved because the AI review failed: ${error.message}`), { status: 503 });
+      }
     }
     input._assistant_review = stageOutputs[stageId];
     const created = new Date().toISOString();

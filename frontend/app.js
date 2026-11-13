@@ -3,6 +3,7 @@ let activeUser = null;
 let selectedRecord = null;
 let toastTimer;
 let visitsRefreshTimer;
+const approvedNurseReviews = new Set();
 const roleNames = { attendant: 'Attendant', nurse: 'Nurse', doctor: 'Doctor', laboratory: 'Laboratory', pharmacist: 'Pharmacist', practitioner: 'Practitioner' };
 const stageNames = { nurse_vitals: 'Nurse observations', doctor_initial: 'Doctor first visit', lab_results: 'Laboratory results', doctor_results: 'Doctor results visit', pharmacy: 'Pharmacy' };
 
@@ -82,6 +83,12 @@ async function loadNurseQueue() {
     panel.innerHTML = `<div class="card-heading"><div><span class="step">NURSE WORKLIST</span><h2>Patient observations</h2><p>Record vital signs for new visits, then review or edit saved records.</p></div><button type="button" class="secondary-button refresh-nurse-queue">Refresh</button></div><section class="nurse-list-section"><div class="section-title"><div><span class="step">TO RECORD</span><h2>New visit patients</h2></div></div>${nurseVisitTable(patients, false)}</section><section class="nurse-list-section"><div class="section-title"><div><span class="step">RECORDED</span><h2>Patients with recorded vitals</h2></div></div>${nurseVisitTable(recorded, true)}</section>`;
     panel.querySelector('.refresh-nurse-queue')?.addEventListener('click', loadNurseQueue);
     panel.querySelectorAll('.select-nurse-patient, .edit-nurse-patient').forEach((button) => button.addEventListener('click', () => selectPatient(button.dataset.patient, button.dataset.encounter)));
+    panel.querySelectorAll('.approve-nurse-review').forEach((button) => button.addEventListener('click', () => {
+      approvedNurseReviews.add(button.dataset.encounter);
+      button.textContent = 'Approved';
+      button.classList.add('approved');
+      button.disabled = true;
+    }));
   } catch (error) { notify(error.message, true); }
 }
 function nurseRiskLevel(dateOfBirth, vitals) {
@@ -96,7 +103,7 @@ function nurseRiskLevel(dateOfBirth, vitals) {
   return 'Normal';
 }
 function nurseVisitTable(visits, recorded) {
-  return `<div class="table-scroll"><table class="visits-table"><thead><tr><th>Patient name</th><th>Date of birth</th><th>Age</th><th>Sex</th><th>Visit opened</th><th>Status</th>${recorded ? '<th>Risk level</th>' : ''}<th></th></tr></thead><tbody>${visits.length ? visits.map((patient) => `<tr><td>${escapeHtml(patient.name)}</td><td>${escapeHtml(patient.date_of_birth)}</td><td>${ageFromDob(patient.date_of_birth)}</td><td>${escapeHtml(patient.sex)}</td><td>${escapeHtml(new Date(patient.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }))}</td><td><span class="visit-status ${recorded ? 'closed' : 'open'}">${recorded ? 'Recorded' : 'To record'}</span></td>${recorded ? `<td><span class="risk-level risk-${String(patient.risk_level ?? 'Normal').toLowerCase()}">${escapeHtml(patient.risk_level ?? 'Normal')}</span></td>` : ''}<td><button type="button" class="secondary-button ${recorded ? 'edit-nurse-patient' : 'select-nurse-patient'}" data-patient="${escapeHtml(patient.patient_id)}" data-encounter="${escapeHtml(patient.id)}">${recorded ? 'View / edit' : 'Record vitals'}</button></td></tr>`).join('') : `<tr><td colspan="${recorded ? 8 : 7}" class="empty-visits">${recorded ? 'No observations have been saved today.' : 'No new visits are waiting for observations.'}</td></tr>`}</tbody></table></div>`;
+  return `<div class="table-scroll"><table class="visits-table"><thead><tr><th>Patient name</th><th>Date of birth</th><th>Age</th><th>Sex</th><th>Visit opened</th><th>Status</th>${recorded ? '<th>Risk level</th><th>Action</th><th>Approval</th>' : '<th></th>'}</tr></thead><tbody>${visits.length ? visits.map((patient) => `<tr><td>${escapeHtml(patient.name)}</td><td>${escapeHtml(patient.date_of_birth)}</td><td>${ageFromDob(patient.date_of_birth)}</td><td>${escapeHtml(patient.sex)}</td><td>${escapeHtml(new Date(patient.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }))}</td><td><span class="visit-status ${recorded ? 'closed' : 'open'}">${recorded ? 'Recorded' : 'To record'}</span></td>${recorded ? `<td><span class="risk-level risk-${String(patient.risk_level ?? 'Normal').toLowerCase()}">${escapeHtml(patient.risk_level ?? 'Normal')}</span></td>` : ''}<td><button type="button" class="secondary-button ${recorded ? 'edit-nurse-patient' : 'select-nurse-patient'}" data-patient="${escapeHtml(patient.patient_id)}" data-encounter="${escapeHtml(patient.id)}">${recorded ? 'View / edit' : 'Record vitals'}</button></td>${recorded ? `<td><button type="button" class="secondary-button approve-nurse-review ${approvedNurseReviews.has(patient.id) ? 'approved' : ''}" data-encounter="${escapeHtml(patient.id)}" ${approvedNurseReviews.has(patient.id) ? 'disabled' : ''}>${approvedNurseReviews.has(patient.id) ? 'Approved' : 'Approve'}</button></td>` : ''}</tr>`).join('') : `<tr><td colspan="${recorded ? 9 : 7}" class="empty-visits">${recorded ? 'No observations have been saved today.' : 'No new visits are waiting for observations.'}</td></tr>`}</tbody></table></div>`;
 }
 async function searchPatients(query) {
   const target = $('#search-results');
@@ -301,13 +308,16 @@ async function saveStage(event, stage, fields, numeric = false, override = null)
   const data = override ?? Object.fromEntries(fields.map((field) => [field, new FormData(form).get(field)?.trim() ?? '']).filter(([, value]) => value !== ''));
   if (numeric) for (const key of Object.keys(data)) data[key] = Number(data[key]);
   try {
-    const result = await request(`/api/encounters/${latestEncounter().id}/stages/${stage}`, { method: 'POST', body: JSON.stringify(data) });
+    const encounterId = latestEncounter().id;
+    const result = await request(`/api/encounters/${encounterId}/stages/${stage}`, { method: 'POST', body: JSON.stringify(data) });
     if (stage === 'nurse_vitals') {
+      approvedNurseReviews.delete(encounterId);
       selectedRecord = null;
+      $('#role-result').textContent = 'Select a patient to continue.';
       $('#patient-details').classList.add('hidden');
       $('#agent-output').classList.add('hidden');
       await loadNurseQueue();
-      notify('Vitals saved. The patient moved to Patients with recorded vitals.');
+      notify('Vitals saved and reviewed. The patient is listed under Patients with recorded vitals.');
       return;
     }
     await selectPatient(selectedRecord.patient.id);

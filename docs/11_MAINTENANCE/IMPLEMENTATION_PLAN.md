@@ -12,7 +12,7 @@ Selected stack: Node.js 26, built-in SQLite, official MCP TypeScript SDK, LangGr
 
 ## Phase 2 — clinical boundary
 
-Implemented: protocol versioning, missing/invalid-field output, strict schema-constrained model output, deterministic evidence checks, and tests rejecting risk classification, diagnosis, prescription, unsupported history, and unsupported actions. Remaining: broader claim-to-source validation before any model-authored prose, and an approved clinical protocol before any clinical risk feature is considered.
+Implemented: protocol versioning, missing/invalid-field output, strict schema-constrained model output, deterministic evidence checks, and tests rejecting risk classification, diagnosis, prescription, unsupported history, and unsupported actions. Nurse-vitals explanations are constrained and cannot override the deterministic category. Remaining: broader claim-to-source validation for model explanations and an approved clinical protocol before risk categories are used in patient care.
 
 ## Phases 3–5 — MCP, model, approval, audit
 

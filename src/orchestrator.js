@@ -65,6 +65,20 @@ const ModelJsonSchema = {
   required: ['history_context', 'requested_action']
 };
 
+const NurseVitalsReviewSchema = z.object({
+  risk_level: z.enum(['High', 'Medium', 'Normal']),
+  explanation: z.string().min(1).max(400)
+}).strict();
+
+const NurseVitalsReviewJsonSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    risk_level: { type: 'string', enum: ['High', 'Medium', 'Normal'] },
+    explanation: { type: 'string', minLength: 1, maxLength: 400 }
+  },
+  required: ['risk_level', 'explanation']
+};
+
 export function validateModelOutput(content, context, evaluation, observations) {
   const parsed = ExplanationSchema.safeParse(JSON.parse(content));
   if (!parsed.success) throw new Error(`Model output did not match the allowed explanation schema: ${parsed.error.message}`);
@@ -84,16 +98,41 @@ function modelMessages(context, evaluation, observations) {
   ];
 }
 
-async function requestModel(messages) {
+async function requestModel(messages, format = ModelJsonSchema) {
   const base = process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434';
   const model = process.env.OLLAMA_MODEL ?? 'qwen2.5:3b';
   const result = await fetch(`${base.replace(/\/$/, '')}/api/chat`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model, stream: false, format: ModelJsonSchema, messages })
+    body: JSON.stringify({ model, stream: false, format, messages })
   });
   if (!result.ok) throw new Error(`Local model endpoint returned ${result.status}: ${await result.text()}`);
   const payload = await result.json();
   return { model, content: payload.message?.content ?? 'null' };
+}
+
+export async function explainNurseVitalsReview(vitals, riskLevel, ruleMessage) {
+  const messages = [
+    {
+      role: 'system',
+      content: 'You explain a deterministic vital-sign screening result in a synthetic clinical workflow demo. Return only the supplied JSON schema. The server has already assigned the risk_level; repeat it exactly and explain only the supplied rule_message and recorded values. Do not reclassify, diagnose, infer causes, recommend treatment, or add facts.'
+    },
+    { role: 'user', content: JSON.stringify({ vitals, risk_level: riskLevel, rule_message: ruleMessage }) }
+  ];
+  const modelResult = await requestModel(messages, NurseVitalsReviewJsonSchema);
+  let decoded;
+  try { decoded = JSON.parse(modelResult.content); }
+  catch { throw new Error('The local model returned invalid JSON for the nurse vitals explanation'); }
+  const parsed = NurseVitalsReviewSchema.safeParse(decoded);
+  if (!parsed.success) throw new Error(`The local model returned an invalid nurse vitals explanation: ${parsed.error.message}`);
+  if (parsed.data.risk_level !== riskLevel) throw new Error('The local model attempted to change the server-assigned risk level');
+  const mentionedRiskLevels = parsed.data.explanation.match(/\b(high|medium|normal)\b/gi) ?? [];
+  if (mentionedRiskLevels.some((level) => level.toLowerCase() !== riskLevel.toLowerCase())) {
+    throw new Error('The local model explanation conflicts with the server-assigned risk level');
+  }
+  if (/\b(diagnos\w*|prescrib\w*|treat\w*|medication|emergency)\b/i.test(parsed.data.explanation)) {
+    throw new Error('The local model returned unsupported clinical advice in the nurse vitals explanation');
+  }
+  return { model: modelResult.model, explanation: parsed.data.explanation };
 }
 
 const graph = new StateGraph(State)

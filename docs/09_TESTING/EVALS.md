@@ -16,7 +16,7 @@ Last run: 2026-11-11, local Windows environment. The original model-backed end-t
 | MCP context, deterministic evaluation, alert submission, unauthorized access, and duplicate alert guard | PASS | `test/mcp.integration.test.js` |
 | Practitioner approval/rejection, role restriction, duplicate decision protection, and persistence | PASS | `test/approval.integration.test.js` |
 | Pending workflow action prevents duplicate execution for the same observation | PASS | `test/workflow-idempotency.test.js` |
-| Department patient search, ordered role handoffs, WHO-based malaria/UTI test drafts, high-BP review prompt, and stale downstream reset | PASS | `test/hospital-workflow.integration.test.js` |
+| Department patient search and handoffs, nurse AI explanation/risk refresh, WHO-based test drafts, high-BP review prompt, and stale downstream reset | PASS | `test/hospital-workflow.integration.test.js` |
 
 Result: **11 passed, 0 failed** from `npm.cmd test` on 2026-11-11.
 

@@ -12,9 +12,11 @@ Other presentations produce no rule-matched recommendation. Previous encounter r
 
 The chosen policy is to use WHO or national guidance only as a draft for clinician review. Current rules cite WHO sources. The WHO AWaRe antibiotic book used for UTI context is the 2022 edition and WHO notes it is being updated. A locally approved national guideline should be configured before relying on these rules in a real facility.
 
+Nurse vital-sign saves re-run the existing deterministic screening rules. The local model may explain the result in constrained text, but cannot assign or change its risk level; the server rejects an explanation that disagrees with the rule result. This limited rules-based category is not clinically validated.
+
 ## Out of scope
 
-The app does not diagnose, classify patients as normal, provide a comprehensive urgency triage, or recommend medicines, doses, quantities, or substitutions. Pharmacy stock is not available as a verified structured formulary. These functions require approved protocols, reliable patient safety context, and clinical validation.
+The app does not diagnose or provide a comprehensive urgency triage. The limited rules-based vital-sign category is not a validated clinical risk classification. The app does not recommend medicines, doses, quantities, or substitutions. Pharmacy stock is not available as a verified structured formulary. These functions require approved protocols, reliable patient safety context, and clinical validation.
 
 ## Evaluation
 

@@ -27,7 +27,7 @@ Open `http://127.0.0.1:3000`. Synthetic department accounts are `attendant` / `a
 
 The API and UI use Node.js with the built-in SQLite database. The MCP server exposes `get_patient_context`, `evaluate_clinical_risk`, and `submit_clinical_alert` on loopback with an internal bearer token. LangGraph orders context retrieval, deterministic evaluation, constrained model explanation, and pending alert creation. The practitioner API owns authorization and approval. Approved alerts are published in the encounter and every tool call, model output, decision, and workflow event is recorded.
 
-The LLM schema is strict and rejects extra fields such as clinical risk classification, diagnosis, or prescription. The deterministic result is stored independently and cannot be changed by model output.
+The legacy workflow LLM schema is strict and rejects extra fields such as clinical risk classification, diagnosis, or prescription. Nurse vital-sign saves separately request a constrained local-model explanation; the model must echo the server-assigned risk level exactly and cannot change it.
 
 ## Documentation
 

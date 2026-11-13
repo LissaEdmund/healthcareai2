@@ -5,3 +5,5 @@ The current LangGraph graph has four ordered nodes: `retrieve_context`, `determi
 The graph cannot directly approve or publish alerts. The final MCP tool only opens an approval request. A separate backend route checks the practitioner role and performs the approval transition. The graph and model have no credential for that route.
 
 The context, deterministic evaluation, constrained local model, and alert-drafting nodes all completed in the local end-to-end run. The model returns only a validated history-context label and an allowed practitioner-review action. Alert text is generated from validated fields and deterministic results. Practitioner approval, all three MCP calls, and the audit timeline were verified in the same run and after service restart.
+
+On each nurse-vitals save, the server re-runs its deterministic screening rules and asks the configured local model for a constrained explanation. The model must echo the server-assigned risk level exactly; a mismatch or invalid explanation blocks the vitals update. Only the deterministic rules assign the displayed category.
