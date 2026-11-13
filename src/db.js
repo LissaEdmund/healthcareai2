@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS observations (
   id TEXT PRIMARY KEY, encounter_id TEXT NOT NULL REFERENCES encounters(id),
   payload TEXT NOT NULL, recorded_by TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS encounter_stages (
+  id TEXT PRIMARY KEY, encounter_id TEXT NOT NULL REFERENCES encounters(id),
+  stage TEXT NOT NULL, payload TEXT NOT NULL, recorded_by TEXT NOT NULL, created_at TEXT NOT NULL,
+  UNIQUE(encounter_id, stage)
+);
+CREATE TABLE IF NOT EXISTS agent_reviews (
+  id TEXT PRIMARY KEY, encounter_id TEXT NOT NULL REFERENCES encounters(id),
+  stage TEXT NOT NULL, actor TEXT NOT NULL, input_json TEXT NOT NULL,
+  output_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY, encounter_id TEXT NOT NULL REFERENCES encounters(id),
   status TEXT NOT NULL, evaluation TEXT, model_input TEXT, model_output TEXT, created_at TEXT NOT NULL

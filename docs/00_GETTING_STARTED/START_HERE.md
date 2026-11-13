@@ -2,7 +2,7 @@
 
 ## Current status
 
-The registration-to-review vertical workflow passes locally with an actual open-weights model. It has a Node.js backend, SQLite persistence, custom MCP server, LangGraph workflow, browser UI, approval routes, and audit storage. Ten automated checks pass. Startup readiness and persisted approval/tool/audit records after service restart were verified. Clean-environment setup has not been verified. The protocol checks field completeness only and has no clinical thresholds. This is a local synthetic demonstration, not for clinical use.
+The local synthetic department workflow covers attendant registration, nurse observations, the doctor's initial test request, laboratory results, the doctor's result review, and pharmacist dispensing. The UI uses role-based demo logins and patient name search. The current test-draft rules are narrow, deterministic WHO-based drafts for clinician review; they are not the model-backed alert workflow described in some legacy architecture notes. The app is a local demonstration, not for clinical use.
 
 ## What the project is intended to do
 
@@ -20,7 +20,7 @@ Practitioner UI -> Authenticated API -> Encounter/database
                                     -> approval gate -> audited action
 ```
 
-The backend, SQLite, MCP server, graph, API, and first workflow UI exist. The first gate passed locally: model output was validated, the agent created a pending alert, a practitioner approved it, and the updated encounter/audit state was retrievable.
+The backend, SQLite, MCP server, graph, API, synthetic department handoff UI, and original model-backed workflow exist. The department UI uses small deterministic WHO draft rules for selected test requests and a high adult-BP review prompt; these are not LLM-generated or clinically validated recommendations. Medication/dose/substitution suggestions and full urgency triage are not implemented.
 
 ## Requirements and eventual commands
 
@@ -37,6 +37,10 @@ The root startup command starts Ollama if needed, custom MCP, backend, and UI, t
 
 ## How to use this guide
 
-Demo accounts are `nurse` / `nurse-demo` and `practitioner` / `practitioner-demo`, unless changed in `.env`. Sign in as nurse, register a synthetic patient, record observations, and run the agent. Sign out and sign in as practitioner to approve or reject the alert. MCP inputs/outputs and audit events appear in the encounter view. Run unit/integration checks with `npm.cmd test`; while services are running, execute the real model-backed workflow with `npm.cmd run test:e2e`. Clean-environment reproducibility has not been checked.
+Department demo accounts are `attendant` / `attendant-demo`, `nurse` / `nurse-demo`, `doctor` / `doctor-demo`, `laboratory` / `laboratory-demo`, and `pharmacist` / `pharmacist-demo`, unless passwords are changed in `.env`. Follow the department walkthrough below. The doctor first-visit screen includes a narrow WHO-based test-draft rule for suspected malaria and limited adult lower-UTI scenarios; suggestions are editable and must be reviewed. A high adult blood-pressure prompt is also available. These rules do not make an LLM diagnosis, medication/dose recommendation, or full normal/urgency classification. Run checks with `npm.cmd test`; `npm.cmd run test:e2e` exercises the original model-backed API workflow. Clean-environment reproducibility has not been checked.
 
 For debugging, run `node src/mcp-server.js` and `node src/server.js` in separate terminals; the latter serves both API and UI. Stop each with Ctrl+C. The single startup command is `npm.cmd start`. See [environment variables](ENVIRONMENT_VARIABLES.md) and [troubleshooting](TROUBLESHOOTING.md).
+
+## Try the department handoffs
+
+The local synthetic workflow has attendant, nurse, doctor, laboratory, and pharmacist demo accounts. Start the app as above and follow [the department handoff walkthrough](DEMO_WORKFLOW.md), signing out between roles and searching for the same patient by name. The attendant does not need an encounter ID. The WHO-based test drafts and BP review prompt are narrow prototype rules; medication suggestions and broader urgency assessment require additional clinical configuration.

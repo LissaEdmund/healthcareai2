@@ -1,6 +1,6 @@
 const base = process.env.HEALTHCAREAI2_URL ?? 'http://127.0.0.1:3000';
 const pageResponse = await fetch(base);
-if (!pageResponse.ok || !(await pageResponse.text()).includes('Patient workflow')) throw new Error('Backend did not serve the connected workflow frontend');
+if (!pageResponse.ok || !(await pageResponse.text()).includes('Synthetic patient journey demonstration')) throw new Error('Backend did not serve the connected workflow frontend');
 const login = await fetch(`${base}/api/login`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ username: 'nurse', password: process.env.DEMO_NURSE_PASSWORD ?? 'nurse-demo' })

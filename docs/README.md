@@ -4,7 +4,7 @@ HealthcareAI2 is a partially implemented synthetic-data clinical workflow assist
 
 ## Status
 
-The repository began empty. Phase 0 is complete. The Phase 1 vertical workflow now passes locally with a real open-weights model; 10 automated tests pass, and persistence after service restart was verified. Clean-environment reproducibility and later department workflows remain incomplete. See [EVALS](09_TESTING/EVALS.md) and [known limitations](11_MAINTENANCE/KNOWN_LIMITATIONS.md).
+The repository began empty. Phase 0 is complete. The Phase 1 vertical workflow passes locally with a real open-weights model; 11 automated tests pass, including the department handoff workflow and narrow WHO-based draft rules. Persistence after service restart was verified. Clean-environment reproducibility and clinical validation remain incomplete. See [EVALS](09_TESTING/EVALS.md) and [known limitations](11_MAINTENANCE/KNOWN_LIMITATIONS.md).
 
 ## Start here
 

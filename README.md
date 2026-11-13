@@ -8,7 +8,7 @@ HealthcareAI2 is an agentic clinical workflow assistance project for synthetic h
 
 Implemented source: Node.js 26 API and browser UI, SQLite persistence, three custom MCP tools, LangGraph orchestration, Ollama HTTP integration, role-based demo login, practitioner approval endpoints, and audit/tool-call persistence.
 
-Verification so far: 10 automated tests pass. `npm.cmd run test:e2e` completed registration through practitioner approval with the actual local open-weights model. Startup readiness and persistence across a service restart passed locally. Clean-machine reproducibility and the rest of the hospital journey are still outstanding. See [known limitations](docs/11_MAINTENANCE/KNOWN_LIMITATIONS.md) and [evaluation results](docs/09_TESTING/EVALS.md).
+Verification so far: 11 automated tests pass, including the synthetic department journey and draft-rule checks. `npm.cmd run test:e2e` completed registration through practitioner approval with the actual local open-weights model. Startup readiness and persistence across a service restart passed locally. Clean-machine reproducibility and clinical validation are still outstanding. See [known limitations](docs/11_MAINTENANCE/KNOWN_LIMITATIONS.md) and [evaluation results](docs/09_TESTING/EVALS.md).
 
 ## Quick start
 
@@ -21,7 +21,7 @@ ollama pull qwen2.5:3b
 npm.cmd start
 ```
 
-Open `http://127.0.0.1:3000`. Demo accounts: `nurse` / `nurse-demo`; `practitioner` / `practitioner-demo`. Run automated tests with `npm.cmd test`. With services running, `npm.cmd run test:e2e` executes the full model-backed workflow. These steps passed locally, not in a clean environment.
+Open `http://127.0.0.1:3000`. Synthetic department accounts are `attendant` / `attendant-demo`, `nurse` / `nurse-demo`, `doctor` / `doctor-demo`, `laboratory` / `laboratory-demo`, and `pharmacist` / `pharmacist-demo`. Follow [the department handoff walkthrough](docs/00_GETTING_STARTED/DEMO_WORKFLOW.md) to carry a patient through all stages using name search. A narrow WHO-based, rules-driven test draft and adult very-high-BP review prompt are available; broader clinical decision support, medicine/dose advice, and normal/urgency classification are not. Run automated tests with `npm.cmd test`; with services running, `npm.cmd run test:e2e` exercises the original model-backed API workflow.
 
 ## Architecture
 

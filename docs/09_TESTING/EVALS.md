@@ -1,6 +1,6 @@
 # Executed evaluation results
 
-Last run: 2026-11-07, local Windows environment, Node.js 26.1.0, Ollama with `qwen2.5:3b`.
+Last run: 2026-11-11, local Windows environment. The original model-backed end-to-end evidence below is from 2026-11-07.
 
 ## Automated suite
 
@@ -16,8 +16,9 @@ Last run: 2026-11-07, local Windows environment, Node.js 26.1.0, Ollama with `qw
 | MCP context, deterministic evaluation, alert submission, unauthorized access, and duplicate alert guard | PASS | `test/mcp.integration.test.js` |
 | Practitioner approval/rejection, role restriction, duplicate decision protection, and persistence | PASS | `test/approval.integration.test.js` |
 | Pending workflow action prevents duplicate execution for the same observation | PASS | `test/workflow-idempotency.test.js` |
+| Department patient search, ordered role handoffs, WHO-based malaria/UTI test drafts, high-BP review prompt, and stale downstream reset | PASS | `test/hospital-workflow.integration.test.js` |
 
-Result: **10 passed, 0 failed** from `npm.cmd test`.
+Result: **11 passed, 0 failed** from `npm.cmd test` on 2026-11-11.
 
 `npm.cmd audit --omit=dev` reported **0 vulnerabilities** after upgrading Zod to `4.6.7`.
 

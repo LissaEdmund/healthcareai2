@@ -12,6 +12,10 @@ Copy `.env.example` to `.env` for local development. `src/start.js` reads the fi
 | `OLLAMA_MODEL` | `qwen2.5:3b` | Model name; it must already be available to Ollama before startup readiness passes. |
 | `OLLAMA_EXECUTABLE` | Auto-detected | Optional path to the Ollama executable if the startup manager needs to launch it and it is outside the usual Windows install path/PATH. |
 | `DEMO_NURSE_PASSWORD` | `nurse-demo` | Local-only synthetic nurse account password. |
+| `DEMO_ATTENDANT_PASSWORD` | `attendant-demo` | Local-only synthetic attendant account password. |
+| `DEMO_DOCTOR_PASSWORD` | `doctor-demo` | Local-only synthetic doctor account password for both consultation stages. |
+| `DEMO_LABORATORY_PASSWORD` | `laboratory-demo` | Local-only synthetic laboratory account password. |
+| `DEMO_PHARMACIST_PASSWORD` | `pharmacist-demo` | Local-only synthetic pharmacist account password. |
 | `DEMO_PRACTITIONER_PASSWORD` | `practitioner-demo` | Local-only practitioner account password. |
 | `MCP_INTERNAL_TOKEN` | `local-demo-internal-token` | Shared credential between local API orchestration and MCP server. |
 

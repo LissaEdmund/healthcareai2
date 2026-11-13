@@ -1,22 +1,21 @@
-# Clinical evaluation and LLM boundary
+# Clinical recommendation boundaries
 
-## Implemented protocol
+## Current implementation
 
-`src/protocol.js` runs protocol `synthetic-observation-completeness` version `0.1.0`. It checks that six configured observation fields are present and numeric. It reports missing/invalid field names and a completeness rule identifier. It has no thresholds, abnormal ranges, combinations, or clinical risk classification; `clinical_risk_classification` is always `null`. This is a technical demonstration protocol, not an approved clinical protocol.
+The six-stage demo uses deterministic, narrow draft rules rather than an LLM for clinical recommendations:
 
-## Execution order
+- A clinician-entered suspected malaria condition can produce a draft parasitological test suggestion (microscopy or rapid diagnostic test), with a WHO source and the triggering facts.
+- Adult lower urinary symptoms with a clinician-entered suspected lower UTI can produce a urinalysis suggestion. A urine culture may be suggested when the clinician records recurrent or complicated-risk context.
+- Systolic blood pressure at least 180 mmHg or diastolic at least 120 mmHg produces a prompt to recheck and alert the doctor. It does not establish a diagnosis or determine emergency status.
 
-1. API validates the observation payload and persists it with actor and timestamp.
-2. LangGraph calls MCP `get_patient_context`.
-3. LangGraph calls MCP `evaluate_clinical_risk`; the MCP server invokes the deterministic function and returns its versioned result.
-4. The result is persisted before model inference.
-5. The local Ollama model receives retrieved context and the deterministic result and returns JSON constrained to history-context and practitioner-review action labels.
-6. Extra keys such as risk classification, diagnosis, or prescription fail Zod validation. The deterministic result remains separately stored.
-7. Backend alert wording is assembled from validated observation fields and deterministic results. Only after valid structured output does the graph call `submit_clinical_alert`, which creates a pending alert and approval request.
-8. A practitioner must approve or reject through an authenticated API endpoint.
+Other presentations produce no rule-matched recommendation. Previous encounter records are retrieved and shown to the doctor and included as review context, but these rules do not infer disease patterns from history. Suggestions are based on clinician-entered facts and must be reviewed and edited by a doctor before they are sent to the laboratory.
 
-## Limits
+The chosen policy is to use WHO or national guidance only as a draft for clinician review. Current rules cite WHO sources. The WHO AWaRe antibiotic book used for UTI context is the 2022 edition and WHO notes it is being updated. A locally approved national guideline should be configured before relying on these rules in a real facility.
 
-The model cannot author free-text alert claims; schema validation blocks unrecognized fields and backend comparison checks its history label. The alert remains a synthetic review request until practitioner approval. Add claim-to-source validation before introducing model-authored prose, and an approved clinical protocol before representing clinical risk evaluation as available.
+## Out of scope
 
-Automated tests verify rejection of risk classification, diagnosis, prescription, unsupported history, and unsupported action output. A successful local model-backed run is recorded in [EVALS.md](../09_TESTING/EVALS.md).
+The app does not diagnose, classify patients as normal, provide a comprehensive urgency triage, or recommend medicines, doses, quantities, or substitutions. Pharmacy stock is not available as a verified structured formulary. These functions require approved protocols, reliable patient safety context, and clinical validation.
+
+## Evaluation
+
+Automated integration tests cover the role handoffs, narrow rule triggers and limits, high-blood-pressure prompt, and stale downstream-stage invalidation. Passing software tests verifies workflow behavior only; it does not establish clinical validity or safety. See [EVALS.md](../09_TESTING/EVALS.md) and [known limitations](../11_MAINTENANCE/KNOWN_LIMITATIONS.md).

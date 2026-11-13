@@ -1,17 +1,13 @@
 const $ = (selector) => document.querySelector(selector);
-let activePatient = null;
-let activeEncounter = null;
-let activeRole = null;
-let latestApproval = null;
+let activeUser = null;
+let selectedRecord = null;
 let toastTimer;
+const roleNames = { attendant: 'Attendant', nurse: 'Nurse', doctor: 'Doctor', laboratory: 'Laboratory', pharmacist: 'Pharmacist', practitioner: 'Practitioner' };
+const stageNames = { nurse_vitals: 'Nurse observations', doctor_initial: 'Doctor first visit', lab_results: 'Laboratory results', doctor_results: 'Doctor results visit', pharmacy: 'Pharmacy' };
 
 function notify(message, error = false) {
-  const toast = $('#toast');
-  toast.textContent = message;
-  toast.classList.toggle('error', error);
-  toast.classList.remove('hidden');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.add('hidden'), 4500);
+  const toast = $('#toast'); toast.textContent = message; toast.classList.toggle('error', error); toast.classList.remove('hidden');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.add('hidden'), 4500);
 }
 async function request(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers } });
@@ -19,122 +15,215 @@ async function request(path, options = {}) {
   if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
 }
+function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]); }
 function showSignedIn(user) {
-  activeRole = user.role;
-  $('#user-label').textContent = `${user.username} · ${user.role}`;
-  $('#logout').classList.remove('hidden');
-  $('#login-card').classList.add('hidden');
-  $('#app-workflow').classList.remove('hidden');
+  activeUser = user;
+  $('#user-label').textContent = `${user.username} · ${roleNames[user.role] ?? user.role}`;
+  $('#logout').classList.remove('hidden'); $('#login-card').classList.add('hidden'); $('#department-app').classList.remove('hidden');
+  $('#page-title').textContent = `${roleNames[user.role] ?? user.role} workspace`;
+  $('#page-subtitle').textContent = roleSubtitle(user.role);
+  renderRolePanel(); renderPatientPanel();
 }
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+function roleSubtitle(role) {
+  return ({ attendant: 'Register patients and find existing records.', nurse: 'Select a registered patient and record blood pressure, temperature, and weight.', doctor: 'Review the patient journey and record consultation decisions.', laboratory: 'Review requested tests and enter samples and results.', pharmacist: 'Review medication orders and record dispensing and counseling.', practitioner: 'Review legacy workflow alerts.' })[role] ?? '';
 }
-
+function renderRolePanel() {
+  const panel = $('#role-panel');
+  if (activeUser.role === 'attendant') {
+    panel.innerHTML = `<div class="card-heading"><div><span class="step">PATIENT REGISTRATION</span><h2>Register a patient</h2><p>A visit record is opened automatically. No encounter number is needed at this desk.</p></div></div>
+      <form id="registration-form" class="stack-form"><label>Patient full name<input name="name" required maxlength="160" placeholder="Patient name"></label><div class="form-grid two-col"><label>Date of birth<input name="date_of_birth" type="date" required></label><label>Sex<select name="sex"><option value="unknown">Unknown</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label></div><button class="primary-button">Register patient</button></form><div id="role-result" class="result-line">Search for an existing patient before creating a new record.</div>`;
+    $('#registration-form').addEventListener('submit', registerPatient);
+  } else if (activeUser.role === 'practitioner') {
+    panel.innerHTML = `<div class="card-heading"><div><span class="step">LEGACY REVIEW</span><h2>Practitioner review</h2><p>The original completeness workflow remains available through the previous demo API. Department screens are focused on the synthetic journey.</p></div></div>`;
+  } else {
+    panel.innerHTML = `<div class="card-heading"><div><span class="step">${escapeHtml(roleNames[activeUser.role].toUpperCase())} WORK AREA</span><h2>${escapeHtml(roleNames[activeUser.role])} patient tasks</h2><p>Search by patient name, select a record, and complete the available stage.</p></div></div><div id="role-result" class="result-line">Select a patient to continue.</div>`;
+  }
+}
+function renderPatientPanel() {
+  $('#patient-panel').innerHTML = `<div class="card-heading"><div><span class="step">PATIENT LOOKUP</span><h2>Search registered patients</h2><p>Enter at least two characters of the patient name.</p></div></div><label>Patient name<input id="patient-search" autocomplete="off" placeholder="Search by name"></label><div id="search-results" class="patient-results"></div>`;
+  let debounce;
+  $('#patient-search').addEventListener('input', () => {
+    clearTimeout(debounce);
+    const query = $('#patient-search').value.trim();
+    debounce = setTimeout(() => searchPatients(query), 200);
+  });
+}
+async function searchPatients(query) {
+  const target = $('#search-results');
+  if (!target) return;
+  if (query.length < 2) { target.innerHTML = ''; return; }
+  try {
+    const { patients } = await request(`/api/patients?q=${encodeURIComponent(query)}`);
+    target.innerHTML = patients.length ? patients.map((patient) => `<button class="patient-option" type="button" data-patient="${escapeHtml(patient.id)}"><strong>${escapeHtml(patient.name)}</strong><small>${escapeHtml(patient.date_of_birth)} · ${escapeHtml(patient.sex)} · ${patient.latest_encounter_id ? 'Visit on file' : 'No visit yet'}</small></button>`).join('') : '<div class="result-line">No matching patient found.</div>';
+    target.querySelectorAll('[data-patient]').forEach((button) => button.addEventListener('click', () => selectPatient(button.dataset.patient)));
+  } catch (error) { notify(error.message, true); }
+}
+async function selectPatient(patientId) {
+  try {
+    selectedRecord = await request(`/api/patients/${patientId}/record`);
+    const latest = selectedRecord.encounters[0];
+    if (!latest && activeUser.role !== 'attendant') throw new Error('This patient has no visit record yet. Ask the attendant to register the visit.');
+    $('#patient-details').classList.remove('hidden');
+    $('#agent-output').classList.add('hidden');
+    renderPatientDetail(); renderRoleAction();
+    const stages = latestStages();
+    const currentStage = activeUser.role === 'nurse' ? 'nurse_vitals'
+      : activeUser.role === 'laboratory' ? 'lab_results'
+        : activeUser.role === 'pharmacist' ? 'pharmacy'
+          : activeUser.role === 'doctor' ? (stages.has('doctor_results') ? 'doctor_results' : 'doctor_initial') : null;
+    const savedReview = currentStage ? stages.get(currentStage)?.data?._assistant_review : null;
+    if (savedReview) renderAgentOutput(currentStage, savedReview, false);
+  } catch (error) { notify(error.message, true); }
+}
+function latestEncounter() { return selectedRecord?.encounters?.[0] ?? null; }
+function latestStages() { return new Map((latestEncounter()?.stages ?? []).map((stage) => [stage.stage, stage])); }
+function renderPatientDetail() {
+  if (!selectedRecord) return;
+  const patient = selectedRecord.patient;
+  $('#patient-details').innerHTML = `<div class="card-heading"><div><span class="step">SELECTED PATIENT</span><h2>${escapeHtml(patient.name)}</h2><p>${escapeHtml(patient.date_of_birth)} · ${escapeHtml(patient.sex)} · ${selectedRecord.encounters.length} recorded visit(s)</p></div></div>${activeUser.role === 'doctor' ? renderJourneySummary() : ''}`;
+}
+function renderJourneySummary() {
+  const encounter = latestEncounter();
+  if (!encounter) return '<p class="result-line">No visit data has been recorded.</p>';
+  const fields = encounter.stages.map((stage) => `<div class="history-stage"><strong>${escapeHtml(stageNames[stage.stage] ?? stage.stage)}</strong><small>${escapeHtml(stage.recorded_by)} · ${escapeHtml(new Date(stage.recorded_at).toLocaleString())}</small><pre>${escapeHtml(JSON.stringify(Object.fromEntries(Object.entries(stage.data).filter(([key]) => !['_assistant_review', '_recommendation_review_input', 'recommendation_review_id'].includes(key))), null, 2))}</pre></div>`).join('');
+  const older = selectedRecord.encounters.slice(1).map((visit) => `<div class="history-stage"><strong>Earlier visit · ${escapeHtml(new Date(visit.created_at).toLocaleDateString())}</strong>${visit.stages.map((stage) => `<small>${escapeHtml(stageNames[stage.stage] ?? stage.stage)}: ${escapeHtml(Object.entries(stage.data).filter(([key]) => !['_assistant_review', '_recommendation_review_input', 'recommendation_review_id'].includes(key)).map(([, value]) => String(value)).join(' · '))}</small>`).join('')}</div>`).join('');
+  return `<div class="journey-summary"><h3>Current visit · ${escapeHtml(new Date(encounter.created_at).toLocaleDateString())}</h3>${fields || '<p class="result-line">No department entries yet.</p>'}<h3>Past visits</h3>${older || '<p class="result-line">No past visits recorded.</p>'}</div>`;
+}
+function renderRoleAction() {
+  const target = $('#role-result');
+  if (!target || !selectedRecord) return;
+  const patient = selectedRecord.patient;
+  const encounter = latestEncounter();
+  const stages = latestStages();
+  if (activeUser.role === 'attendant') {
+    const alreadyOpen = encounter && !encounter.stages.length && Date.now() - Date.parse(encounter.created_at) < 5 * 60 * 1000;
+    target.innerHTML = `Selected: <strong>${escapeHtml(patient.name)}</strong> · ${selectedRecord.encounters.length} visit(s) recorded.${alreadyOpen ? ' A new visit is open for the nurse.' : '<button id="open-visit" class="secondary-button">Open a new visit</button>'}`;
+    $('#open-visit')?.addEventListener('click', async () => {
+      try { await request(`/api/patients/${patient.id}/encounters`, { method: 'POST', body: '{}' }); await selectPatient(patient.id); notify('New visit opened for the nurse.'); }
+      catch (error) { notify(error.message, true); }
+    });
+    return;
+  }
+  if (!encounter) { target.textContent = 'This patient has no visit record.'; return; }
+  if (activeUser.role === 'nurse') {
+    const saved = stages.get('nurse_vitals');
+    target.innerHTML = `${saved ? `<div class="saved-data"><strong>Saved observations</strong><pre>${escapeHtml(JSON.stringify(Object.fromEntries(Object.entries(saved.data).filter(([key]) => key !== '_assistant_review')), null, 2))}</pre></div>` : ''}
+      <form id="nurse-form" class="stack-form"><div class="form-grid two-col"><label>Systolic blood pressure <span class="unit">mmHg</span><input name="systolic_bp_mmhg" type="number" min="1" required></label><label>Diastolic blood pressure <span class="unit">mmHg</span><input name="diastolic_bp_mmhg" type="number" min="1" required></label><label>Temperature <span class="unit">°C</span><input name="temperature_c" type="number" min="1" step="0.1" required></label><label>Weight <span class="unit">kg</span><input name="weight_kg" type="number" min="1" step="0.1" required></label></div><button class="primary-button">Save observations</button></form>`;
+    $('#nurse-form').addEventListener('submit', (event) => saveStage(event, 'nurse_vitals', ['systolic_bp_mmhg', 'diastolic_bp_mmhg', 'temperature_c', 'weight_kg'], true));
+    return;
+  }
+  if (activeUser.role === 'doctor') {
+    const initial = stages.get('doctor_initial');
+    const results = stages.get('lab_results');
+    if (!initial) {
+      target.innerHTML = `<div class="section-title"><div><span class="step">FIRST VISIT</span><h2>Consultation and laboratory tests</h2></div></div><p class="result-line">Nurse observations: ${stages.has('nurse_vitals') ? escapeHtml(JSON.stringify(Object.fromEntries(Object.entries(stages.get('nurse_vitals').data).filter(([key]) => key !== '_assistant_review')))) : 'not recorded'}.</p><form id="doctor-initial-form" class="stack-form"><label>Symptoms as reported by the patient and observed by the doctor<textarea name="symptoms" rows="4" required></textarea></label><label>Clinician-suspected condition(s)<input name="suspected_conditions" required placeholder="For example: suspected malaria, suspected lower UTI"></label><label>Relevant history/risk context<textarea name="risk_factors" rows="2" placeholder="Document relevant prior UTI, pregnancy, immune/urinary history, or other context reviewed"></textarea></label><label>Examination notes<textarea name="exam_notes" rows="3"></textarea></label><label>Doctor's initial proposed tests<textarea name="test_request" rows="2" placeholder="Optional initial ideas; edit the final request after reviewing drafts"></textarea></label><button id="generate-test-draft" class="secondary-button">Save consultation notes and run test draft</button><div id="test-draft-output" class="hidden"></div><button id="save-doctor-initial" class="primary-button hidden" type="button">Save final tests and send to laboratory</button></form>`;
+      $('#doctor-initial-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const values = Object.fromEntries(new FormData(form));
+        try {
+          const draft = await request(`/api/encounters/${encounter.id}/reviews/doctor_initial`, { method: 'POST', body: JSON.stringify(values) });
+          const output = draft.output;
+          $('#test-draft-output').classList.remove('hidden');
+          $('#test-draft-output').innerHTML = `<div class="recommendation-panel"><strong>WHO-guideline draft · ${escapeHtml(output.status)}</strong><p>Retrieved ${draft.retrieved_prior_visit_count} previous visit(s). This rules-based draft is for clinician review; it does not diagnose.</p>${output.history_context.length ? `<div class="history-context"><strong>Past record facts reviewed</strong>${output.history_context.map((fact) => `<small>${escapeHtml(fact.visit_date)} · ${escapeHtml(fact.source_stage)} · ${escapeHtml(fact.recorded_facts.join('; '))}</small>`).join('')}</div>` : '<p class="result-line">No prior visit facts are recorded.</p>'}${output.recommendations.map((item, index) => `<label class="recommendation-item"><span><input type="checkbox" class="draft-test-option" data-index="${index}" checked> <strong>${escapeHtml(item.test)}</strong></span><small>${escapeHtml(item.reason)}</small><small><b>Based on:</b> ${escapeHtml(item.supporting_facts.join('; '))}</small><small><a href="${escapeHtml(item.source.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.source.title)}</a> · ${escapeHtml(item.source.version)}</small></label>`).join('')}${output.review_notes.map((note) => `<p class="result-line">${escapeHtml(note)}</p>`).join('')}<ul>${output.limitations.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul></div>`;
+          $('#save-doctor-initial').classList.remove('hidden');
+          $('#save-doctor-initial').onclick = async () => {
+            const selectedDrafts = [...$('#test-draft-output').querySelectorAll('.draft-test-option:checked')].map((checkbox) => output.recommendations[Number(checkbox.dataset.index)].test);
+            const baseTests = form.elements.test_request.value.trim();
+            const tests = [...new Set([baseTests, ...selectedDrafts].filter(Boolean))].join('\n');
+            if (!tests) { notify('Enter the doctor’s requested tests or select a draft suggestion.', true); return; }
+            const saved = { symptoms: form.elements.symptoms.value.trim(), suspected_conditions: form.elements.suspected_conditions.value.trim(), risk_factors: form.elements.risk_factors.value.trim(), exam_notes: form.elements.exam_notes.value.trim(), test_request: tests, recommendation_review_id: draft.review_id };
+            try {
+              const result = await request(`/api/encounters/${encounter.id}/stages/doctor_initial`, { method: 'POST', body: JSON.stringify(saved) });
+              await selectPatient(selectedRecord.patient.id);
+              renderAgentOutput('doctor_initial', result.assistant_review);
+              notify('Doctor review and editable test request sent to the laboratory.');
+            } catch (error) { notify(error.message, true); }
+          };
+          notify('WHO-guideline draft generated for doctor review.');
+        } catch (error) { notify(error.message, true); }
+      });
+    } else if (!results) {
+      target.innerHTML = `<div class="saved-data"><strong>Requested tests</strong><p>${escapeHtml(initial.data.test_request)}</p><p class="result-line">Waiting for laboratory results.</p></div>`;
+    } else {
+      const current = stages.get('doctor_results');
+      target.innerHTML = `<div class="section-title"><div><span class="step">RESULTS VISIT</span><h2>Review results and write medication order</h2></div></div><div class="saved-data"><strong>Laboratory results</strong><pre>${escapeHtml(JSON.stringify(Object.fromEntries(Object.entries(results.data).filter(([key]) => key !== '_assistant_review')), null, 2))}</pre></div><form id="doctor-results-form" class="stack-form"><label>Assessment<textarea name="assessment" rows="3" required>${escapeHtml(current?.data?.assessment ?? '')}</textarea></label><label>Medication order as decided by doctor<textarea name="medication_order" rows="4" required placeholder="Medicine, strength/form, quantity, and directions as prescribed by the doctor">${escapeHtml(current?.data?.medication_order ?? '')}</textarea></label><button class="primary-button">Save order and send to pharmacy</button></form>`;
+      $('#doctor-results-form').addEventListener('submit', (event) => saveStage(event, 'doctor_results', ['assessment', 'medication_order']));
+    }
+    return;
+  }
+  if (activeUser.role === 'laboratory') {
+    const requested = stages.get('doctor_initial');
+    const saved = stages.get('lab_results');
+    let requestedItems = (requested?.data?.test_request ?? '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
+    if (requestedItems.length <= 1 && requestedItems[0]?.includes(',')) requestedItems = requestedItems[0].split(/[,;]+/).map((item) => item.trim()).filter(Boolean);
+    let priorResults = [];
+    try { priorResults = JSON.parse(saved?.data?.results ?? '[]'); } catch {}
+    target.innerHTML = `${requested ? `<div class="saved-data"><strong>Doctor's requested tests</strong><p>${escapeHtml(requested.data.test_request)}</p></div><form id="lab-form" class="stack-form"><div class="lab-tests">${requestedItems.map((item, index) => `<div class="lab-test-row" data-index="${index}"><strong>${escapeHtml(item)}</strong><label>Sample taken<input class="sample-value" required value="${escapeHtml(priorResults[index]?.sample ?? '')}" placeholder="Sample type"></label><label>Result<textarea class="result-value" rows="2" required placeholder="Enter this test result">${escapeHtml(priorResults[index]?.result ?? '')}</textarea></label></div>`).join('')}</div><label>Laboratory notes<textarea id="lab-notes" rows="2">${escapeHtml(saved?.data?.result_notes ?? '')}</textarea></label><button class="primary-button">Save all results and return to doctor</button></form>` : '<p class="result-line">No doctor test request has been received for this visit.</p>'}`;
+    if (requested) $('#lab-form').addEventListener('submit', (event) => {
+      const items = [...$('#lab-form').querySelectorAll('.lab-test-row')].map((element) => ({ test: element.querySelector('strong').textContent, sample: element.querySelector('.sample-value').value.trim(), result: element.querySelector('.result-value').value.trim() }));
+      if (items.some((item) => !item.sample || !item.result)) { event.preventDefault(); notify('Enter a sample and result for every requested test.', true); return; }
+      const fields = { tests_received: JSON.stringify(items.map((item) => item.test)), specimen: JSON.stringify(items.map((item) => item.sample)), results: JSON.stringify(items), result_notes: $('#lab-notes').value.trim() };
+      saveStage(event, 'lab_results', Object.keys(fields), false, fields);
+    });
+    return;
+  }
+  if (activeUser.role === 'pharmacist') {
+    const order = stages.get('doctor_results');
+    const saved = stages.get('pharmacy');
+    const orderedItems = (order?.data?.medication_order ?? '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
+    const savedRows = (() => { try { return JSON.parse(saved?.data?.dispensed ?? '[]'); } catch { return []; } })();
+    target.innerHTML = `${order ? `<div class="saved-data"><strong>Doctor's medication order</strong><pre>${escapeHtml(order.data.medication_order)}</pre></div><form id="pharmacy-form" class="stack-form"><div class="medicine-rows">${orderedItems.map((item, index) => {
+      const prior = savedRows[index] ?? {};
+      return `<div class="medicine-row" data-index="${index}"><div><strong>${escapeHtml(item)}</strong><small>As written by the doctor</small></div><label>Availability<select class="medicine-availability"><option value="available" ${prior.availability === 'available' ? 'selected' : ''}>Available</option><option value="unavailable" ${prior.availability === 'unavailable' ? 'selected' : ''}>Unavailable</option></select></label><label>Quantity supplied<input class="medicine-quantity" value="${escapeHtml(prior.quantity ?? '')}" placeholder="As ordered"></label><label class="substitute-label ${prior.availability === 'unavailable' ? '' : 'hidden'}">Pharmacist selected alternative<input class="medicine-substitute" value="${escapeHtml(prior.substitute ?? '')}"></label></div>`;
+    }).join('')}</div><label>Instructions explained to the patient<textarea name="instructions" rows="3" required>${escapeHtml(saved?.data?.instructions ?? '')}</textarea></label><button class="primary-button">Complete dispensing and patient journey</button></form>` : '<p class="result-line">No doctor medication order has been received.</p>'}`;
+    if (order) {
+      $('#pharmacy-form').querySelectorAll('.medicine-availability').forEach((select) => select.addEventListener('change', () => select.closest('.medicine-row').querySelector('.substitute-label').classList.toggle('hidden', select.value !== 'unavailable')));
+      $('#pharmacy-form').addEventListener('submit', (event) => {
+      const items = [...$('#pharmacy-form').querySelectorAll('.medicine-row')].map((element) => ({ ordered_item: element.querySelector('strong').textContent, availability: element.querySelector('.medicine-availability').value, quantity: element.querySelector('.medicine-quantity').value.trim(), substitute: element.querySelector('.medicine-substitute').value.trim() }));
+      if (items.some((item) => item.availability === 'available' && !item.quantity || item.availability === 'unavailable' && !item.substitute)) { event.preventDefault(); notify('Enter the quantity supplied or the pharmacist-selected alternative for each medicine.', true); return; }
+        const fields = { dispensed: JSON.stringify(items), substitutions: JSON.stringify(items.filter((item) => item.availability === 'unavailable')), instructions: new FormData(event.currentTarget).get('instructions') };
+        saveStage(event, 'pharmacy', Object.keys(fields), false, fields);
+      });
+    }
+  }
+}
+async function saveStage(event, stage, fields, numeric = false, override = null) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = override ?? Object.fromEntries(fields.map((field) => [field, new FormData(form).get(field)?.trim() ?? '']).filter(([, value]) => value !== ''));
+  if (numeric) for (const key of Object.keys(data)) data[key] = Number(data[key]);
+  try {
+    const result = await request(`/api/encounters/${latestEncounter().id}/stages/${stage}`, { method: 'POST', body: JSON.stringify(data) });
+    await selectPatient(selectedRecord.patient.id);
+    renderAgentOutput(stage, result.assistant_review);
+    notify('Information saved and sent to the next department.');
+  } catch (error) { notify(error.message, true); }
+}
+function renderAgentOutput(stage, review, shouldScroll = true) {
+  const target = $('#agent-output'); target.classList.remove('hidden');
+  target.classList.toggle('urgent-review', review?.status === 'urgent_clinician_review_prompt');
+  target.innerHTML = `<div class="card-heading"><div><span class="step">WORKFLOW STATUS · ${escapeHtml(stageNames[stage] ?? stage)}</span><h2>${escapeHtml(review?.status ?? 'Saved')}</h2></div></div><p>${escapeHtml(review?.message ?? 'The entry has been saved to the patient record.')}</p>${review?.source ? `<p><a href="${escapeHtml(review.source.url)}" target="_blank" rel="noreferrer">${escapeHtml(review.source.title)}</a></p>` : ''}`;
+  if (shouldScroll) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+async function registerPatient(event) {
+  event.preventDefault();
+  const form = event.currentTarget; const values = Object.fromEntries(new FormData(form));
+  try {
+    const existing = await request(`/api/patients?q=${encodeURIComponent(values.name)}`);
+    const exact = existing.patients.find((patient) => patient.name.trim().toLocaleLowerCase() === values.name.trim().toLocaleLowerCase() && patient.date_of_birth === values.date_of_birth);
+    if (exact) { $('#role-result').innerHTML = `A matching record already exists for <strong>${escapeHtml(exact.name)}</strong>. Select it from search instead of registering another record.`; notify('Possible duplicate patient: select the existing record.', true); return; }
+    const result = await request('/api/patients', { method: 'POST', body: JSON.stringify(values) });
+    $('#role-result').innerHTML = `Registered <strong>${escapeHtml(result.patient.name)}</strong>. The visit has been opened for the nurse.`;
+    form.reset();
+    const search = $('#patient-search'); search.value = values.name; await searchPatients(values.name);
+    notify('Patient registered and sent to the nurse queue.');
+  } catch (error) { notify(error.message, true); }
+}
 $('#login-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  try {
-    const user = await request('/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) });
-    showSignedIn(user);
-    notify(`Signed in as ${user.role}.`);
-  } catch (error) { notify(error.message, true); }
+  event.preventDefault(); const form = new FormData(event.currentTarget);
+  try { showSignedIn(await request('/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) })); }
+  catch (error) { notify(error.message, true); }
 });
-
-$('#logout').addEventListener('click', async () => {
-  await request('/api/logout', { method: 'POST' }).catch(() => {});
-  location.reload();
-});
-
-$('#patient-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  try {
-    const result = await request('/api/patients', { method: 'POST', body: JSON.stringify({ name: form.get('name'), date_of_birth: form.get('date_of_birth'), sex: form.get('sex') }) });
-    activePatient = result.patient;
-    const encounter = await request(`/api/patients/${activePatient.id}/encounters`, { method: 'POST', body: '{}' });
-    activeEncounter = encounter.encounter;
-    $('#patient-result').textContent = `Synthetic record ${activePatient.id.slice(0, 8)} created for ${activePatient.name}.`;
-    $('#patient-result').classList.add('active');
-    $('#encounter-result').textContent = `Encounter ${activeEncounter.id.slice(0, 8)} opened. Add observations to continue.`;
-    $('#encounter-result').classList.add('active');
-    $('#record-button').disabled = false;
-    notify('Patient and encounter created.');
-  } catch (error) { notify(error.message, true); }
-});
-
-$('#observations-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!activeEncounter) return;
-  const values = {};
-  for (const [key, value] of new FormData(event.currentTarget).entries()) if (value !== '') values[key] = Number(value);
-  try {
-    await request(`/api/encounters/${activeEncounter.id}/observations`, { method: 'POST', body: JSON.stringify(values) });
-    $('#encounter-result').textContent = `Observations recorded. The completeness check will not classify clinical risk.`;
-    $('#encounter-result').classList.add('active');
-    $('#run-button').disabled = false;
-    notify('Observations recorded.');
-  } catch (error) { notify(error.message, true); }
-});
-
-$('#run-button').addEventListener('click', async () => {
-  if (!activeEncounter) return;
-  const button = $('#run-button');
-  button.disabled = true;
-  button.innerHTML = 'Running tools and model…';
-  try {
-    const result = await request(`/api/encounters/${activeEncounter.id}/run`, { method: 'POST', body: '{}' });
-    latestApproval = result.alert.approval_id;
-    $('#results').classList.remove('hidden');
-    $('#evaluation-output').innerHTML = `<pre>${escapeHtml(JSON.stringify(result.evaluation, null, 2))}</pre>`;
-    const model = result.model_output;
-    $('#model-output').innerHTML = `<div class="explanation"><p><strong>Model:</strong> ${escapeHtml(model.model)}</p><p><strong>Observation completeness:</strong> ${escapeHtml(model.observation_completeness)}</p><p><strong>History context:</strong> ${escapeHtml(model.history_context)}</p><p><strong>Requested workflow action:</strong> ${escapeHtml(model.requested_action)}</p><p class="result-line">Constrained model output was checked against stored records. Alert wording is assembled from validated data.</p></div>`;
-    $('#tool-count').textContent = `${result.context ? 1 : 0} context · 1 evaluation · 1 alert`;
-    $('#tool-output').innerHTML = `<div class="tool-row"><div><strong>get_patient_context</strong><small>Patient history and encounter context retrieved through MCP.</small></div><span class="tool-state">Completed</span></div><div class="tool-row"><div><strong>evaluate_clinical_risk</strong><small>${escapeHtml(result.evaluation.protocol_id)} @ ${escapeHtml(result.evaluation.protocol_version)} · No clinical risk threshold.</small></div><span class="tool-state">Completed</span></div><div class="tool-row"><div><strong>submit_clinical_alert</strong><small>Created alert ${escapeHtml(result.alert.alert_id.slice(0, 8))} and approval request.</small></div><span class="tool-state">Pending review</span></div>`;
-    renderApproval({ id: result.alert.approval_id, status: 'pending', alert_id: result.alert.alert_id, body: '' });
-    $('#run-status').textContent = 'Awaiting practitioner review';
-    await refreshEncounter();
-    $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    notify('Workflow completed and approval requested.');
-  } catch (error) {
-    notify(error.message, true);
-    button.disabled = false;
-  } finally {
-    button.innerHTML = 'Run workflow <span>→</span>';
-  }
-});
-
-function renderApproval(approval) {
-  const actions = activeRole === 'practitioner' && approval.status === 'pending'
-    ? `<div class="approval-action"><button class="approve-button" data-decision="approve">Approve and publish alert</button><input id="reject-reason" placeholder="Reason required to reject"><button class="reject-button" data-decision="reject">Reject</button></div>`
-    : '';
-  $('#approval-status').textContent = approval.status === 'pending' ? 'Awaiting review' : approval.status;
-  $('#approval-status').className = approval.status === 'pending' ? 'status-pending' : 'model-badge';
-  $('#approval-output').innerHTML = `<div class="explanation"><p><strong>Draft alert:</strong> ${escapeHtml(approval.body || '')}</p><p>Approval ID ${escapeHtml(approval.id)}</p>${actions}</div>`;
-  $('#approval-output').querySelectorAll('[data-decision]').forEach((button) => button.addEventListener('click', async () => {
-    const decision = button.dataset.decision;
-    const reason = $('#reject-reason')?.value;
-    try {
-      const output = await request(`/api/approvals/${approval.id}`, { method: 'POST', body: JSON.stringify({ decision, ...(decision === 'reject' ? { reason } : {}) }) });
-      renderApproval({ ...approval, status: output.status });
-      await refreshEncounter();
-      notify(output.status === 'approved' ? 'Practitioner approved and published the alert.' : 'Alert rejected and recorded.');
-    } catch (error) { notify(error.message, true); }
-  }));
-}
-
-async function refreshEncounter() {
-  if (!activeEncounter) return;
-  const data = await request(`/api/encounters/${activeEncounter.id}`);
-  if (data.alerts.length) {
-    const alert = data.alerts[0];
-    const original = $('#approval-output').textContent;
-    renderApproval({ id: alert.approval_id, status: alert.approval_status, alert_id: alert.id, body: alert.body || original });
-  }
-  $('#audit-output').innerHTML = data.audit.map((event) => `<div class="audit-row"><div><strong>${escapeHtml(event.action)}</strong><small>${escapeHtml(event.actor)} · ${escapeHtml(event.resource_type)} ${escapeHtml(event.resource_id || '')}</small></div><span class="tool-state">${escapeHtml(new Date(event.created_at).toLocaleTimeString())}</span></div>`).join('') || '<div class="result-line">No audit events yet.</div>';
-  if (data.tool_calls.length) {
-    $('#tool-output').innerHTML = data.tool_calls.map((tool) => `<div class="tool-row"><div><strong>${escapeHtml(tool.tool_name)}</strong><small>Input: ${escapeHtml(JSON.stringify(tool.input))}<br>Output: ${escapeHtml(JSON.stringify(tool.output))}</small></div><span class="tool-state">${escapeHtml(tool.status)}</span></div>`).join('');
-    $('#tool-count').textContent = `${data.tool_calls.length} audited MCP calls`;
-  }
-}
-
+$('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }).catch(() => {}); location.reload(); });
 request('/api/me').then(showSignedIn).catch(() => {});

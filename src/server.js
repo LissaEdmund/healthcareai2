@@ -5,13 +5,25 @@ import { extname, isAbsolute, relative, resolve } from 'node:path';
 import { db, row, rows, run, audit } from './db.js';
 import { REQUIRED_OBSERVATIONS } from './protocol.js';
 import { runWorkflow } from './orchestrator.js';
+import { buildTestDraft } from './recommendations.js';
 
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 3000);
 const sessionHours = 8;
 const demoUsers = [
+  { username: 'attendant', password: process.env.DEMO_ATTENDANT_PASSWORD ?? 'attendant-demo', role: 'attendant' },
   { username: 'nurse', password: process.env.DEMO_NURSE_PASSWORD ?? 'nurse-demo', role: 'nurse' },
+  { username: 'doctor', password: process.env.DEMO_DOCTOR_PASSWORD ?? 'doctor-demo', role: 'doctor' },
+  { username: 'laboratory', password: process.env.DEMO_LABORATORY_PASSWORD ?? 'laboratory-demo', role: 'laboratory' },
+  { username: 'pharmacist', password: process.env.DEMO_PHARMACIST_PASSWORD ?? 'pharmacist-demo', role: 'pharmacist' },
   { username: 'practitioner', password: process.env.DEMO_PRACTITIONER_PASSWORD ?? 'practitioner-demo', role: 'practitioner' }
+];
+const workflowStages = [
+  { id: 'nurse_vitals', role: 'nurse', label: 'Nurse · vital signs' },
+  { id: 'doctor_initial', role: 'doctor', label: 'Doctor · first visit' },
+  { id: 'lab_results', role: 'laboratory', label: 'Laboratory · samples and results' },
+  { id: 'doctor_results', role: 'doctor', label: 'Doctor · results visit' },
+  { id: 'pharmacy', role: 'pharmacist', label: 'Pharmacy · dispensing' }
 ];
 const frontendRoot = resolve('frontend');
 
@@ -60,6 +72,8 @@ function encounterSnapshot(id) {
     encounter: { id: encounter.id, patient_id: encounter.patient_id, status: encounter.status, created_at: encounter.created_at },
     patient: { id: encounter.patient_id, name: encounter.name, date_of_birth: encounter.date_of_birth, sex: encounter.sex },
     observations: rows('SELECT id, payload, recorded_by, created_at FROM observations WHERE encounter_id = ? ORDER BY created_at', id).map((o) => ({ id: o.id, ...JSON.parse(o.payload), recorded_by: o.recorded_by, recorded_at: o.created_at })),
+    stages: rows(`SELECT stage, payload, recorded_by, created_at FROM encounter_stages WHERE encounter_id = ? ORDER BY CASE stage
+      WHEN 'nurse_vitals' THEN 0 WHEN 'doctor_initial' THEN 1 WHEN 'lab_results' THEN 2 WHEN 'doctor_results' THEN 3 WHEN 'pharmacy' THEN 4 ELSE 5 END`, id).map((s) => ({ stage: s.stage, data: JSON.parse(s.payload), recorded_by: s.recorded_by, recorded_at: s.created_at })),
     latest_run: latestRun ? { id: latestRun.id, status: latestRun.status, evaluation: latestRun.evaluation && JSON.parse(latestRun.evaluation), model_output: latestRun.model_output && JSON.parse(latestRun.model_output) } : null,
     alerts,
     tool_calls: latestRun ? rows('SELECT id, tool_name, input_json, output_json, status, started_at, finished_at FROM tool_calls WHERE run_id = ? ORDER BY started_at', latestRun.id).map((t) => ({ ...t, input: JSON.parse(t.input_json), output: t.output_json ? JSON.parse(t.output_json) : null, input_json: undefined, output_json: undefined })) : [],
@@ -71,6 +85,17 @@ function encounterSnapshot(id) {
         OR details LIKE ?
       ORDER BY sequence`, id, id, id, id, `%${id}%`).map((event) => ({ ...event, details: JSON.parse(event.details) }))
   };
+}
+function patientRecord(patientId) {
+  const patient = row('SELECT id, name, date_of_birth, sex, created_at FROM patients WHERE id = ?', patientId);
+  if (!patient) return null;
+  const encounters = rows('SELECT id, status, created_at FROM encounters WHERE patient_id = ? ORDER BY created_at DESC', patientId).map((encounter) => ({
+    ...encounter,
+    observations: rows('SELECT payload, recorded_by, created_at FROM observations WHERE encounter_id = ? ORDER BY created_at', encounter.id).map((item) => ({ ...JSON.parse(item.payload), recorded_by: item.recorded_by, recorded_at: item.created_at })),
+    stages: rows(`SELECT stage, payload, recorded_by, created_at FROM encounter_stages WHERE encounter_id = ? ORDER BY CASE stage
+      WHEN 'nurse_vitals' THEN 0 WHEN 'doctor_initial' THEN 1 WHEN 'lab_results' THEN 2 WHEN 'doctor_results' THEN 3 WHEN 'pharmacy' THEN 4 ELSE 5 END`, encounter.id).map((item) => ({ stage: item.stage, data: JSON.parse(item.payload), recorded_by: item.recorded_by, recorded_at: item.created_at }))
+  }));
+  return { patient, encounters };
 }
 
 async function api(req, res, url) {
@@ -91,6 +116,21 @@ async function api(req, res, url) {
     audit(user.username, 'login', 'session', hash(token), { role: user.role });
     return json(res, 200, { username: user.username, role: user.role }, { 'set-cookie': `hcai_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionHours * 3600}` });
   }
+  if (req.method === 'GET' && url.pathname === '/api/patients') {
+    requireRole(auth(req), ['attendant', 'nurse', 'doctor', 'laboratory', 'pharmacist', 'practitioner']);
+    const query = (url.searchParams.get('q') ?? '').trim();
+    if (query.length < 2) return json(res, 200, { patients: [] });
+    const matches = rows(`SELECT p.id, p.name, p.date_of_birth, p.sex, p.created_at,
+      (SELECT e.id FROM encounters e WHERE e.patient_id = p.id ORDER BY e.created_at DESC LIMIT 1) AS latest_encounter_id
+      FROM patients p WHERE p.name LIKE ? COLLATE NOCASE ORDER BY p.name LIMIT 25`, `%${query}%`);
+    return json(res, 200, { patients: matches });
+  }
+  const patientRecordMatch = url.pathname.match(/^\/api\/patients\/([0-9a-f-]+)\/record$/i);
+  if (req.method === 'GET' && patientRecordMatch) {
+    requireRole(auth(req), ['attendant', 'nurse', 'doctor', 'laboratory', 'pharmacist', 'practitioner']);
+    const record = patientRecord(patientRecordMatch[1]);
+    return record ? json(res, 200, record) : json(res, 404, { error: 'Patient not found' });
+  }
   if (req.method === 'POST' && url.pathname === '/api/logout') {
     const session = auth(req);
     const token = cookie(req, 'hcai_session');
@@ -99,8 +139,38 @@ async function api(req, res, url) {
     return json(res, 200, { ok: true }, { 'set-cookie': 'hcai_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
   }
   const session = auth(req);
+  const reviewMatch = url.pathname.match(/^\/api\/encounters\/([0-9a-f-]+)\/reviews\/doctor_initial$/i);
+  if (req.method === 'POST' && reviewMatch) {
+    requireRole(session, ['doctor']);
+    const encounter = row('SELECT e.id, e.patient_id, p.date_of_birth FROM encounters e JOIN patients p ON p.id = e.patient_id WHERE e.id = ?', reviewMatch[1]);
+    if (!encounter) return json(res, 404, { error: 'Encounter not found' });
+    if (!row('SELECT id FROM encounter_stages WHERE encounter_id = ? AND stage = ?', encounter.id, 'nurse_vitals')) return json(res, 409, { error: 'Record nurse observations before requesting a test draft' });
+    const input = await body(req);
+    const allowed = ['symptoms', 'suspected_conditions', 'risk_factors', 'exam_notes', 'test_request'];
+    if (Object.keys(input).some((key) => !allowed.includes(key)) || Object.values(input).some((value) => typeof value !== 'string' || value.length > 5000)) return json(res, 400, { error: 'Provide supported consultation text fields (up to 5000 characters each)' });
+    for (const key of allowed) if (input[key] !== undefined) input[key] = input[key].trim();
+    if (!validString(input.symptoms, 5000) || !validString(input.suspected_conditions, 5000)) return json(res, 400, { error: 'Record the patient symptoms and clinician-suspected condition(s) before requesting a draft' });
+    const today = new Date();
+    const dob = new Date(`${encounter.date_of_birth}T00:00:00Z`);
+    let ageYears = today.getUTCFullYear() - dob.getUTCFullYear();
+    if (today.getUTCMonth() < dob.getUTCMonth() || (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() < dob.getUTCDate())) ageYears -= 1;
+    const priorVisits = rows('SELECT id, created_at FROM encounters WHERE patient_id = ? AND id <> ? ORDER BY created_at DESC', encounter.patient_id, encounter.id);
+    const historyContext = priorVisits.flatMap((visit) => rows('SELECT stage, payload FROM encounter_stages WHERE encounter_id = ? ORDER BY created_at', visit.id).map((stage) => {
+      const saved = JSON.parse(stage.payload);
+      const selected = ({ doctor_initial: ['suspected_conditions', 'symptoms', 'risk_factors'], lab_results: ['results'], doctor_results: ['assessment', 'medication_order'] })[stage.stage] ?? [];
+      const facts = selected.map((key) => saved[key]).filter((value) => typeof value === 'string' && value.trim());
+      return facts.length ? { visit_date: visit.created_at.slice(0, 10), source_stage: stage.stage, recorded_facts: facts } : null;
+    }).filter(Boolean)).slice(0, 20);
+    const output = buildTestDraft({ symptoms: input.symptoms, suspectedConditions: input.suspected_conditions, riskFactors: input.risk_factors ?? '', ageYears, historyContext });
+    const id = randomUUID();
+    const created = new Date().toISOString();
+    const reviewInput = { ...input, retrieved_prior_visit_count: priorVisits.length, history_context: historyContext, rule_age_band: ageYears >= 18 ? 'adult' : 'under_18' };
+    run('INSERT INTO agent_reviews (id, encounter_id, stage, actor, input_json, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, encounter.id, 'doctor_initial', session.username, JSON.stringify(reviewInput), JSON.stringify(output), created);
+    audit(session.username, 'who_test_draft_created', 'agent_review', id, { encounter_id: encounter.id, protocol_id: output.protocol_id, status: output.status, recommendation_count: output.recommendations.length, prior_visit_count: priorVisits.length });
+    return json(res, 200, { review_id: id, created_at: created, retrieved_prior_visit_count: priorVisits.length, output });
+  }
   if (req.method === 'POST' && url.pathname === '/api/patients') {
-    requireRole(session, ['nurse', 'practitioner']);
+    requireRole(session, ['attendant', 'nurse', 'practitioner']);
     const input = await body(req);
     const dateValue = typeof input.date_of_birth === 'string' ? Date.parse(`${input.date_of_birth}T00:00:00Z`) : Number.NaN;
     const validDate = /^\d{4}-\d{2}-\d{2}$/.test(input.date_of_birth ?? '') && Number.isFinite(dateValue) && new Date(dateValue).toISOString().slice(0, 10) === input.date_of_birth;
@@ -109,11 +179,14 @@ async function api(req, res, url) {
     const created = new Date().toISOString();
     run('INSERT INTO patients (id, name, date_of_birth, sex, created_at) VALUES (?, ?, ?, ?, ?)', id, input.name.trim(), input.date_of_birth, input.sex, created);
     audit(session.username, 'patient_registered', 'patient', id, { synthetic: true });
+    const encounterId = randomUUID();
+    run('INSERT INTO encounters (id, patient_id, status, created_at) VALUES (?, ?, ?, ?)', encounterId, id, 'triage', created);
+    audit(session.username, 'encounter_created', 'encounter', encounterId, { patient_id: id });
     return json(res, 201, { patient: { id, name: input.name.trim(), date_of_birth: input.date_of_birth, sex: input.sex } });
   }
   const newEncounter = url.pathname.match(/^\/api\/patients\/([0-9a-f-]+)\/encounters$/i);
   if (req.method === 'POST' && newEncounter) {
-    requireRole(session, ['nurse', 'practitioner']);
+    requireRole(session, ['attendant', 'nurse', 'practitioner']);
     const patient = row('SELECT id FROM patients WHERE id = ?', newEncounter[1]);
     if (!patient) return json(res, 404, { error: 'Patient not found' });
     const id = randomUUID();
@@ -135,6 +208,76 @@ async function api(req, res, url) {
     run('INSERT INTO observations (id, encounter_id, payload, recorded_by, created_at) VALUES (?, ?, ?, ?, ?)', id, encounter.id, JSON.stringify(input), session.username, created);
     audit(session.username, 'observations_recorded', 'encounter', encounter.id, { observation_id: id, fields_recorded: supplied });
     return json(res, 201, { observation_id: id, created_at: created });
+  }
+  const stageMatch = url.pathname.match(/^\/api\/encounters\/([0-9a-f-]+)\/stages\/([a-z_]+)$/i);
+  if (req.method === 'POST' && stageMatch) {
+    const [, encounterId, stageId] = stageMatch;
+    const stage = workflowStages.find((candidate) => candidate.id === stageId);
+    if (!stage) return json(res, 404, { error: 'Workflow stage not found' });
+    requireRole(session, [stage.role]);
+    const stageEncounter = row('SELECT e.id, p.date_of_birth FROM encounters e JOIN patients p ON p.id = e.patient_id WHERE e.id = ?', encounterId);
+    if (!stageEncounter) return json(res, 404, { error: 'Encounter not found' });
+    const input = await body(req);
+    const allowedFields = {
+      nurse_vitals: ['systolic_bp_mmhg', 'diastolic_bp_mmhg', 'temperature_c', 'weight_kg'],
+      doctor_initial: ['symptoms', 'suspected_conditions', 'risk_factors', 'exam_notes', 'test_request', 'recommendation_review_id'],
+      lab_results: ['tests_received', 'specimen', 'results', 'result_notes'],
+      doctor_results: ['assessment', 'medication_order', 'ai_medication_review'],
+      pharmacy: ['dispensed', 'instructions', 'substitutions']
+    }[stageId];
+    const invalid = Object.entries(input).some(([key, value]) => !allowedFields.includes(key) || (typeof value !== 'string' && typeof value !== 'number') || (typeof value === 'string' && value.length > 5000) || (typeof value === 'number' && !Number.isFinite(value)));
+    if (invalid) return json(res, 400, { error: 'Enter supported text or numeric fields' });
+    const prior = workflowStages.slice(0, workflowStages.indexOf(stage));
+    if (prior.some((item) => !row('SELECT id FROM encounter_stages WHERE encounter_id = ? AND stage = ?', encounterId, item.id))) return json(res, 409, { error: 'Complete the previous workflow stage first' });
+    const requiredByStage = {
+      nurse_vitals: ['systolic_bp_mmhg', 'diastolic_bp_mmhg', 'temperature_c', 'weight_kg'],
+      doctor_initial: ['symptoms', 'suspected_conditions', 'test_request', 'recommendation_review_id'],
+      lab_results: ['tests_received', 'specimen', 'results'],
+      doctor_results: ['assessment', 'medication_order'],
+      pharmacy: ['dispensed', 'instructions']
+    }[stageId];
+    if (requiredByStage.some((key) => input[key] === undefined || String(input[key]).trim() === '')) return json(res, 400, { error: `Complete required fields: ${requiredByStage.join(', ')}` });
+    if (stageId === 'nurse_vitals' && (input.systolic_bp_mmhg <= 0 || input.diastolic_bp_mmhg <= 0 || input.temperature_c <= 0 || input.weight_kg <= 0)) return json(res, 400, { error: 'Vital sign values must be positive numbers' });
+    if (stageId === 'doctor_initial') {
+      const review = row('SELECT output_json, input_json FROM agent_reviews WHERE id = ? AND encounter_id = ? AND stage = ? AND actor = ?', input.recommendation_review_id, encounterId, 'doctor_initial', session.username);
+      if (!review) return json(res, 409, { error: 'Generate a clinician-reviewable test draft before saving the first visit' });
+      const reviewedInput = JSON.parse(review.input_json);
+      if (['symptoms', 'suspected_conditions', 'risk_factors', 'exam_notes'].some((field) => (input[field] ?? '') !== (reviewedInput[field] ?? ''))) return json(res, 409, { error: 'Symptoms, suspected conditions, risk context, or exam notes changed after the draft. Generate a fresh review before saving.' });
+      input._recommendation_draft = JSON.parse(review.output_json);
+      input._recommendation_review_input = reviewedInput;
+    }
+    if (stageId === 'doctor_results') delete input.ai_medication_review;
+    const today = new Date();
+    const dob = new Date(`${stageEncounter.date_of_birth}T00:00:00Z`);
+    let ageYears = today.getUTCFullYear() - dob.getUTCFullYear();
+    if (today.getUTCMonth() < dob.getUTCMonth() || (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() < dob.getUTCDate())) ageYears -= 1;
+    const highAdultBp = stageId === 'nurse_vitals' && ageYears >= 18 && (input.systolic_bp_mmhg >= 180 || input.diastolic_bp_mmhg >= 120);
+    const stageOutputs = {
+      nurse_vitals: highAdultBp
+        ? { status: 'urgent_clinician_review_prompt', message: 'Recorded adult blood pressure is at or above 180 systolic or 120 diastolic. WHO describes this as very high blood pressure (usually 180/120 or higher). Repeat/confirm the reading and alert the doctor immediately for clinical assessment; assess for symptoms such as chest pain, breathing difficulty, severe headache, confusion, vomiting, or vision change. This is a review prompt, not a diagnosis or complete emergency assessment.', source: { title: 'WHO hypertension fact sheet', url: 'https://www.who.int/news-room/fact-sheets/detail/hypertension' } }
+        : { status: ageYears >= 18 ? 'not_clinically_assessed' : 'adult_threshold_not_applicable', message: ageYears >= 18 ? 'Vitals saved. No high-BP review prompt matched this limited draft rule; this does not mean the patient is normal or rule out urgency. A clinician must assess the patient.' : 'Vitals saved. Adult BP draft rule was not applied to this age group; pediatric assessment is required.' },
+      doctor_initial: { status: 'clinician_review_required', message: 'WHO-based test suggestions are drafts only. The doctor has reviewed and edited the final test request before handoff.' },
+      lab_results: { status: 'results_recorded', message: 'Results saved to the encounter for doctor review.' },
+      doctor_results: { status: 'clinician_review_required', message: 'The clinician assessment and medication order are saved. WHO AWaRe infection guidance is not sufficient to select a patient-specific medicine/dose here: allergy, pregnancy, renal/liver status, diagnosis, and the hospital formulary are not available. No medicine or dose suggestion was generated.', source: { title: 'WHO AWaRe antibiotic book', url: 'https://www.who.int/publications/i/item/9789240062382' } },
+      pharmacy: { status: 'dispensing_recorded', message: 'Dispensing and counseling recorded. The hospital medicine catalog/stock list is not configured, so the system cannot recommend an in-stock substitute or quantity. Substitution remains a pharmacist decision.' }
+    };
+    if (stageId === 'doctor_initial') {
+      const draft = input._recommendation_draft;
+      stageOutputs.doctor_initial = draft.recommendations.length
+        ? { status: 'clinician_review_required', message: 'WHO guideline test suggestions were stored alongside the doctor-edited laboratory request. They are drafts, not a diagnosis.' }
+        : { status: 'no_rule_matched', message: 'No configured WHO test draft rule matched the clinician-entered condition(s). The doctor’s test request is saved for laboratory handoff.' };
+    }
+    input._assistant_review = stageOutputs[stageId];
+    const created = new Date().toISOString();
+    const laterStages = workflowStages.slice(workflowStages.indexOf(stage) + 1);
+    for (const later of laterStages) {
+      const removed = run('DELETE FROM encounter_stages WHERE encounter_id = ? AND stage = ?', encounterId, later.id);
+      if (removed.changes) audit(session.username, 'downstream_stage_invalidated', 'encounter', encounterId, { changed_stage: stageId, invalidated_stage: later.id });
+    }
+    run('INSERT INTO encounter_stages (id, encounter_id, stage, payload, recorded_by, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(encounter_id, stage) DO UPDATE SET payload=excluded.payload, recorded_by=excluded.recorded_by, created_at=excluded.created_at', randomUUID(), encounterId, stageId, JSON.stringify(input), session.username, created);
+    audit(session.username, 'workflow_stage_recorded', 'encounter', encounterId, { stage: stageId, fields: Object.keys(input) });
+    run('UPDATE encounters SET status = ? WHERE id = ?', workflowStages[workflowStages.indexOf(stage) + 1]?.id ?? 'complete', encounterId);
+    return json(res, 201, { stage: stageId, recorded_at: created, recorded_by: session.username, assistant_review: stageOutputs[stageId] });
   }
   const workflowMatch = url.pathname.match(/^\/api\/encounters\/([0-9a-f-]+)\/run$/i);
   if (req.method === 'POST' && workflowMatch) {
@@ -167,7 +310,7 @@ async function api(req, res, url) {
   }
   const encounterMatch = url.pathname.match(/^\/api\/encounters\/([0-9a-f-]+)$/i);
   if (req.method === 'GET' && encounterMatch) {
-    requireRole(session, ['nurse', 'practitioner']);
+    requireRole(session, ['attendant', 'nurse', 'doctor', 'laboratory', 'pharmacist', 'practitioner']);
     const result = encounterSnapshot(encounterMatch[1]);
     return result ? json(res, 200, result) : json(res, 404, { error: 'Encounter not found' });
   }
