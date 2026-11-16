@@ -4,6 +4,7 @@ let selectedRecord = null;
 let toastTimer;
 let visitsRefreshTimer;
 const approvedNurseReviews = new Set();
+const declinedNurseReviews = new Set();
 const roleNames = { attendant: 'Attendant', nurse: 'Nurse', doctor: 'Doctor', laboratory: 'Laboratory', pharmacist: 'Pharmacist', practitioner: 'Practitioner' };
 const stageNames = { nurse_vitals: 'Nurse observations', doctor_initial: 'Doctor first visit', lab_results: 'Laboratory results', doctor_results: 'Doctor results visit', pharmacy: 'Pharmacy' };
 
@@ -20,6 +21,7 @@ async function request(path, options = {}) {
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]); }
 function showSignedIn(user) {
   activeUser = user;
+  document.body.classList.remove('signed-out');
   $('#user-label').textContent = user.username;
   $('#logout').classList.remove('hidden'); $('#login-card').classList.add('hidden'); $('#department-app').classList.remove('hidden');
   $('#page-title').textContent = `${roleNames[user.role] ?? user.role} workspace`;
@@ -33,6 +35,12 @@ function roleSubtitle(role) {
 }
 function renderRolePanel() {
   const panel = $('#role-panel');
+  if (activeUser.role === 'nurse') {
+    panel.innerHTML = '';
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
   if (activeUser.role === 'attendant') {
     panel.innerHTML = `<div class="card-heading"><div><span class="step">PATIENT REGISTRATION</span><h2>Register a patient</h2><p>A visit record is opened automatically. No encounter number is needed at this desk.</p></div></div>
       <form id="registration-form" class="stack-form"><label>Patient full name<input name="name" required maxlength="160" placeholder="Patient name"></label><div class="form-grid two-col"><label>Date of birth<input name="date_of_birth" type="date" required></label><label>Age (years)<input name="age" type="number" min="0" max="130" readonly placeholder="Calculated from date of birth"></label><label>Sex<select name="sex"><option value="female">Female</option><option value="male">Male</option></select></label></div><button class="primary-button">Register patient</button></form><div id="role-result" class="result-line">Search for an existing patient before creating a new record.</div>`;
@@ -46,14 +54,17 @@ function renderRolePanel() {
 }
 function renderPatientPanel() {
   if (activeUser.role === 'nurse') {
-    $('#patient-panel').classList.add('hidden');
-    $('.role-layout').classList.add('nurse-layout');
+    $('#role-panel')?.classList.add('hidden');
+    $('#patient-panel')?.classList.add('hidden');
+    $('.role-layout')?.classList.add('hidden');
     $('#nurse-queue').classList.remove('hidden');
     loadNurseQueue();
     return;
   }
-  $('.role-layout').classList.remove('nurse-layout');
-  $('#patient-panel').classList.remove('hidden');
+  $('.role-layout')?.classList.remove('hidden');
+  $('.role-layout')?.classList.remove('nurse-layout');
+  $('#role-panel')?.classList.remove('hidden');
+  $('#patient-panel')?.classList.remove('hidden');
   $('#nurse-queue').classList.add('hidden');
   $('#patient-panel').innerHTML = `<div class="card-heading"><div><span class="step">PATIENT LOOKUP</span><h2>Search registered patients</h2><p>Enter at least two characters, then open a visit from the result.</p></div></div><label>Patient name<input id="patient-search" autocomplete="off" placeholder="Search by name"></label><div id="search-results" class="patient-results"></div>`;
   let debounce;
@@ -64,6 +75,7 @@ function renderPatientPanel() {
   });
   if (activeUser.role === 'attendant') loadTodayVisits();
 }
+let activeNurseTab = 'observations';
 async function loadNurseQueue() {
   const panel = $('#nurse-queue');
   if (!panel || activeUser?.role !== 'nurse') return;
@@ -76,35 +88,132 @@ async function loadNurseQueue() {
       const patientRecord = await request(`/api/patients/${visit.patient_id}/record`);
       const encounter = patientRecord.encounters.find((item) => item.id === visit.id);
       const nurseStage = encounter?.stages.find((item) => item.stage === 'nurse_vitals');
-      return { ...visit, nurse_vitals_recorded: Boolean(nurseStage), risk_level: nurseStage ? nurseRiskLevel(visit.date_of_birth, nurseStage.data) : null };
+      return { ...visit, nurse_vitals_recorded: Boolean(nurseStage), nurseStageData: nurseStage?.data ?? null, risk_level: nurseStage ? nurseRiskLevel(visit.date_of_birth, nurseStage.data) : null };
     }));
     const patients = enrichedVisits.filter((visit) => !visit.nurse_vitals_recorded);
     const recorded = enrichedVisits.filter((visit) => visit.nurse_vitals_recorded);
-    panel.innerHTML = `<div class="card-heading"><div><span class="step">NURSE WORKLIST</span><h2>Patient observations</h2><p>Record vital signs for new visits, then review or edit saved records.</p></div><button type="button" class="secondary-button refresh-nurse-queue">Refresh</button></div><section class="nurse-list-section"><div class="section-title"><div><span class="step">TO RECORD</span><h2>New visit patients</h2></div></div>${nurseVisitTable(patients, false)}</section><section class="nurse-list-section"><div class="section-title"><div><span class="step">RECORDED</span><h2>Patients with recorded vitals</h2></div></div>${nurseVisitTable(recorded, true)}</section>`;
-    panel.querySelector('.refresh-nurse-queue')?.addEventListener('click', loadNurseQueue);
-    panel.querySelectorAll('.select-nurse-patient, .edit-nurse-patient').forEach((button) => button.addEventListener('click', () => selectPatient(button.dataset.patient, button.dataset.encounter)));
+    panel.innerHTML = `<div class="card-heading"><div><span class="step">NURSE WORKLIST</span><h2>Nurse station</h2><p>Record vital signs for new visits, then review or edit saved records.</p></div><button type="button" class="secondary-button refresh-nurse-queue">Refresh</button></div><div class="nurse-tabs"><button type="button" class="nurse-tab ${activeNurseTab === 'observations' ? 'active' : ''}" data-nurse-tab="observations">Patient observations <span class="tab-count">${patients.length}</span></button><button type="button" class="nurse-tab ${activeNurseTab === 'recorded' ? 'active' : ''}" data-nurse-tab="recorded">Patients with recorded vitals <span class="tab-count">${recorded.length}</span></button></div><div class="nurse-tab-content" id="nurse-tab-observations" style="${activeNurseTab === 'observations' ? '' : 'display:none'}">${nurseObservationsTable(patients)}</div><div class="nurse-tab-content" id="nurse-tab-recorded" style="${activeNurseTab === 'recorded' ? '' : 'display:none'}">${nurseRecordedTable(recorded)}</div>`;
+    panel.querySelector('.refresh-nurse-queue')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Refreshing...';
+      try {
+        await loadNurseQueue();
+        notify('Information reloaded.');
+      } catch (err) {
+        notify(err.message, true);
+      }
+    });
+    panel.querySelectorAll('.nurse-tab').forEach((tab) => tab.addEventListener('click', () => {
+      activeNurseTab = tab.dataset.nurseTab;
+      panel.querySelectorAll('.nurse-tab').forEach((t) => t.classList.toggle('active', t.dataset.nurseTab === activeNurseTab));
+      panel.querySelector('#nurse-tab-observations').style.display = activeNurseTab === 'observations' ? '' : 'none';
+      panel.querySelector('#nurse-tab-recorded').style.display = activeNurseTab === 'recorded' ? '' : 'none';
+    }));
+    panel.querySelectorAll('.record-nurse-patient').forEach((button) => button.addEventListener('click', () => openNurseRecordModal(button.dataset.patient, button.dataset.encounter, button.dataset.name)));
+    panel.querySelectorAll('.view-edit-nurse-patient').forEach((button) => {
+      const visit = recorded.find((v) => v.id === button.dataset.encounter);
+      button.addEventListener('click', () => openNurseEditModal(button.dataset.patient, button.dataset.encounter, button.dataset.name, visit?.nurseStageData, visit?.risk_level));
+    });
     panel.querySelectorAll('.approve-nurse-review').forEach((button) => button.addEventListener('click', () => {
-      approvedNurseReviews.add(button.dataset.encounter);
+      const id = button.dataset.encounter;
+      approvedNurseReviews.add(id);
+      declinedNurseReviews.delete(id);
       button.textContent = 'Approved';
       button.classList.add('approved');
       button.disabled = true;
+      const row = button.closest('tr');
+      const declineBtn = row?.querySelector('.decline-nurse-review');
+      if (declineBtn) {
+        declineBtn.disabled = true;
+        declineBtn.classList.remove('declined');
+        declineBtn.textContent = 'Decline';
+      }
+      notify('Observations approved.');
+    }));
+    panel.querySelectorAll('.decline-nurse-review').forEach((button) => button.addEventListener('click', () => {
+      const id = button.dataset.encounter;
+      declinedNurseReviews.add(id);
+      approvedNurseReviews.delete(id);
+      button.textContent = 'Declined';
+      button.classList.add('declined');
+      button.disabled = true;
+      const row = button.closest('tr');
+      const approveBtn = row?.querySelector('.approve-nurse-review');
+      if (approveBtn) {
+        approveBtn.disabled = true;
+        approveBtn.classList.remove('approved');
+        approveBtn.textContent = 'Approve';
+      }
+      notify('Observations declined.');
     }));
   } catch (error) { notify(error.message, true); }
 }
-function nurseRiskLevel(dateOfBirth, vitals) {
-  const age = ageFromDob(dateOfBirth);
-  const adult = typeof age === 'number' && age >= 18;
-  const highTemperature = vitals.temperature_c < 36 || vitals.temperature_c > 39;
-  const highAdultBp = adult && (vitals.systolic_bp_mmhg >= 180 || vitals.diastolic_bp_mmhg >= 120);
-  if (highTemperature || highAdultBp) return 'High';
-  const raisedTemperature = vitals.temperature_c >= 38;
-  const raisedAdultBp = adult && (vitals.systolic_bp_mmhg >= 140 || vitals.diastolic_bp_mmhg >= 90);
-  if (raisedTemperature || raisedAdultBp) return 'Medium';
-  return 'Normal';
+function nurseObservationsTable(visits) {
+  return `<div class="table-scroll"><table class="visits-table"><thead><tr><th>Patient name</th><th>Date of birth</th><th>Age</th><th>Sex</th><th>Visit opened</th><th>Status</th><th></th></tr></thead><tbody>${visits.length ? visits.map((patient) => `<tr><td>${escapeHtml(patient.name)}</td><td>${escapeHtml(patient.date_of_birth)}</td><td>${ageFromDob(patient.date_of_birth)}</td><td>${escapeHtml(patient.sex)}</td><td>${escapeHtml(new Date(patient.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }))}</td><td><span class="visit-status open">To record</span></td><td><button type="button" class="secondary-button record-nurse-patient" data-patient="${escapeHtml(patient.patient_id)}" data-encounter="${escapeHtml(patient.id)}" data-name="${escapeHtml(patient.name)}">Record</button></td></tr>`).join('') : '<tr><td colspan="7" class="empty-visits">No new visits are waiting for observations.</td></tr>'}</tbody></table></div>`;
 }
-function nurseVisitTable(visits, recorded) {
-  return `<div class="table-scroll"><table class="visits-table"><thead><tr><th>Patient name</th><th>Date of birth</th><th>Age</th><th>Sex</th><th>Visit opened</th><th>Status</th>${recorded ? '<th>Risk level</th><th>Action</th><th>Approval</th>' : '<th></th>'}</tr></thead><tbody>${visits.length ? visits.map((patient) => `<tr><td>${escapeHtml(patient.name)}</td><td>${escapeHtml(patient.date_of_birth)}</td><td>${ageFromDob(patient.date_of_birth)}</td><td>${escapeHtml(patient.sex)}</td><td>${escapeHtml(new Date(patient.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }))}</td><td><span class="visit-status ${recorded ? 'closed' : 'open'}">${recorded ? 'Recorded' : 'To record'}</span></td>${recorded ? `<td><span class="risk-level risk-${String(patient.risk_level ?? 'Normal').toLowerCase()}">${escapeHtml(patient.risk_level ?? 'Normal')}</span></td>` : ''}<td><button type="button" class="secondary-button ${recorded ? 'edit-nurse-patient' : 'select-nurse-patient'}" data-patient="${escapeHtml(patient.patient_id)}" data-encounter="${escapeHtml(patient.id)}">${recorded ? 'View / edit' : 'Record vitals'}</button></td>${recorded ? `<td><button type="button" class="secondary-button approve-nurse-review ${approvedNurseReviews.has(patient.id) ? 'approved' : ''}" data-encounter="${escapeHtml(patient.id)}" ${approvedNurseReviews.has(patient.id) ? 'disabled' : ''}>${approvedNurseReviews.has(patient.id) ? 'Approved' : 'Approve'}</button></td>` : ''}</tr>`).join('') : `<tr><td colspan="${recorded ? 9 : 7}" class="empty-visits">${recorded ? 'No observations have been saved today.' : 'No new visits are waiting for observations.'}</td></tr>`}</tbody></table></div>`;
+function nurseRecordedTable(visits) {
+  return `<div class="table-scroll"><table class="visits-table"><thead><tr><th>Patient name</th><th>Date of birth</th><th>Age</th><th>Sex</th><th>Visit opened</th><th>Status</th><th>Risk level</th><th>Action</th><th>Approval</th><th>Decline</th></tr></thead><tbody>${visits.length ? visits.map((patient) => {
+    const isApproved = approvedNurseReviews.has(patient.id);
+    const isDeclined = declinedNurseReviews.has(patient.id);
+    return `<tr><td>${escapeHtml(patient.name)}</td><td>${escapeHtml(patient.date_of_birth)}</td><td>${ageFromDob(patient.date_of_birth)}</td><td>${escapeHtml(patient.sex)}</td><td>${escapeHtml(new Date(patient.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }))}</td><td><span class="visit-status closed">Recorded</span></td><td><span class="risk-level risk-${String(patient.risk_level ?? 'Normal').toLowerCase()}">${escapeHtml(patient.risk_level ?? 'Normal')}</span></td><td><button type="button" class="secondary-button view-edit-nurse-patient" data-patient="${escapeHtml(patient.patient_id)}" data-encounter="${escapeHtml(patient.id)}" data-name="${escapeHtml(patient.name)}">View / Edit</button></td><td><button type="button" class="secondary-button approve-nurse-review ${isApproved ? 'approved' : ''}" data-encounter="${escapeHtml(patient.id)}" ${isApproved || isDeclined ? 'disabled' : ''}>${isApproved ? 'Approved' : 'Approve'}</button></td><td><button type="button" class="secondary-button decline-nurse-review ${isDeclined ? 'declined' : ''}" data-encounter="${escapeHtml(patient.id)}" ${isApproved || isDeclined ? 'disabled' : ''}>${isDeclined ? 'Declined' : 'Decline'}</button></td></tr>`;
+  }).join('') : '<tr><td colspan="10" class="empty-visits">No observations have been saved today.</td></tr>'}</tbody></table></div>`;
 }
+function openNurseRecordModal(patientId, encounterId, patientName) {
+  closeNurseModal();
+  const overlay = document.createElement('div');
+  overlay.className = 'nurse-modal-overlay';
+  overlay.innerHTML = `<div class="nurse-modal"><div class="card-heading"><div><span class="step">RECORD VITALS</span><h2>${escapeHtml(patientName)}</h2></div><button type="button" class="quiet-button nurse-modal-close">&times; Close</button></div><form id="nurse-modal-form" class="stack-form"><div class="form-grid two-col"><label>Weight <span class="unit">kg</span><input name="weight_kg" type="number" min="1" step="0.1" required></label><label>Temperature <span class="unit">&deg;C</span><input name="temperature_c" type="number" min="25" max="45" step="0.1" required></label><label>Systolic blood pressure <span class="unit">mmHg</span><input name="systolic_bp_mmhg" type="number" min="1" required></label><label>Diastolic blood pressure <span class="unit">mmHg</span><input name="diastolic_bp_mmhg" type="number" min="1" required></label></div><button class="primary-button" type="submit">Save observations</button></form></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.nurse-modal-close').addEventListener('click', closeNurseModal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNurseModal(); });
+  overlay.querySelector('#nurse-modal-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = {};
+    for (const field of ['systolic_bp_mmhg', 'diastolic_bp_mmhg', 'temperature_c', 'weight_kg']) {
+      data[field] = Number(new FormData(form).get(field));
+    }
+    try {
+      await request(`/api/encounters/${encounterId}/stages/nurse_vitals`, { method: 'POST', body: JSON.stringify(data) });
+      approvedNurseReviews.delete(encounterId);
+      declinedNurseReviews.delete(encounterId);
+      closeNurseModal();
+      activeNurseTab = 'recorded';
+      await loadNurseQueue();
+      notify('Vitals saved. AI has assessed the risk level. Patient moved to recorded vitals.');
+    } catch (error) { notify(error.message, true); }
+  });
+}
+function openNurseEditModal(patientId, encounterId, patientName, existingData, currentRiskLevel) {
+  closeNurseModal();
+  const overlay = document.createElement('div');
+  overlay.className = 'nurse-modal-overlay';
+  overlay.innerHTML = `<div class="nurse-modal"><div class="card-heading"><div><span class="step">VIEW / EDIT VITALS</span><h2>${escapeHtml(patientName)}</h2><p>Current risk level: <span class="risk-level risk-${String(currentRiskLevel ?? 'Normal').toLowerCase()}">${escapeHtml(currentRiskLevel ?? 'Normal')}</span></p></div><button type="button" class="quiet-button nurse-modal-close">&times; Close</button></div><form id="nurse-modal-form" class="stack-form"><div class="form-grid two-col"><label>Weight <span class="unit">kg</span><input name="weight_kg" type="number" min="1" step="0.1" value="${escapeHtml(existingData?.weight_kg ?? '')}" required></label><label>Temperature <span class="unit">&deg;C</span><input name="temperature_c" type="number" min="25" max="45" step="0.1" value="${escapeHtml(existingData?.temperature_c ?? '')}" required></label><label>Systolic blood pressure <span class="unit">mmHg</span><input name="systolic_bp_mmhg" type="number" min="1" value="${escapeHtml(existingData?.systolic_bp_mmhg ?? '')}" required></label><label>Diastolic blood pressure <span class="unit">mmHg</span><input name="diastolic_bp_mmhg" type="number" min="1" value="${escapeHtml(existingData?.diastolic_bp_mmhg ?? '')}" required></label></div><button class="primary-button" type="submit">Save changes</button></form></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.nurse-modal-close').addEventListener('click', closeNurseModal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNurseModal(); });
+  overlay.querySelector('#nurse-modal-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = {};
+    for (const field of ['systolic_bp_mmhg', 'diastolic_bp_mmhg', 'temperature_c', 'weight_kg']) {
+      data[field] = Number(new FormData(form).get(field));
+    }
+    try {
+      await request(`/api/encounters/${encounterId}/stages/nurse_vitals`, { method: 'POST', body: JSON.stringify(data) });
+      approvedNurseReviews.delete(encounterId);
+      declinedNurseReviews.delete(encounterId);
+      closeNurseModal();
+      await loadNurseQueue();
+      notify('Vitals updated. AI has reassessed the risk level based on new values.');
+    } catch (error) { notify(error.message, true); }
+  });
+}
+function closeNurseModal() {
+  document.querySelector('.nurse-modal-overlay')?.remove();
+}
+
 async function searchPatients(query) {
   const target = $('#search-results');
   if (!target) return;
@@ -356,5 +465,13 @@ $('#login-form').addEventListener('submit', async (event) => {
   try { showSignedIn(await request('/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) })); }
   catch (error) { notify(error.message, true); }
 });
+$('#password-visibility').addEventListener('click', (event) => {
+  const password = $('#login-password');
+  const showPassword = password.type === 'password';
+  password.type = showPassword ? 'text' : 'password';
+  event.currentTarget.setAttribute('aria-label', showPassword ? 'Hide password' : 'Show password');
+  event.currentTarget.title = showPassword ? 'Hide password' : 'Show password';
+});
+$('#demo-accounts-toggle').addEventListener('click', () => $('#demo-accounts-dialog').showModal());
 $('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }).catch(() => {}); location.reload(); });
 request('/api/me').then(showSignedIn).catch(() => {});

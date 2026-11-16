@@ -1,8 +1,8 @@
 # Synthetic demo accounts
 
-The local UI provides these synthetic demo accounts:
+The local Medix login page accepts each username as the account ID. Click “IT Support” on the login artwork to see the default role credentials. Passwords can be overridden with the corresponding environment variables.
 
-| Username | Default password | Permission in this slice |
+| Account ID (username) | Default password | Permission in this slice |
 |---|---|---|
 | `nurse` | `nurse-demo` | Search for a registered patient and record blood pressure, temperature, and weight. |
 | `attendant` | `attendant-demo` | Register a synthetic patient and open an encounter. |

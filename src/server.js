@@ -102,13 +102,62 @@ function nurseVitalsRiskLevel(dateOfBirth, vitals) {
   const today = new Date();
   let ageYears = today.getUTCFullYear() - dob.getUTCFullYear();
   if (today.getUTCMonth() < dob.getUTCMonth() || (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() < dob.getUTCDate())) ageYears--;
-  const adult = ageYears >= 18;
-  const highTemperature = vitals.temperature_c < 36 || vitals.temperature_c > 39;
-  const highAdultBp = adult && (vitals.systolic_bp_mmhg >= 180 || vitals.diastolic_bp_mmhg >= 120);
-  if (highTemperature || highAdultBp) return 'High';
-  const raisedTemperature = vitals.temperature_c >= 38;
-  const raisedAdultBp = adult && (vitals.systolic_bp_mmhg >= 140 || vitals.diastolic_bp_mmhg >= 90);
-  if (raisedTemperature || raisedAdultBp) return 'Medium';
+
+  const temp = vitals.temperature_c;
+  const sys = vitals.systolic_bp_mmhg;
+  const dia = vitals.diastolic_bp_mmhg;
+
+  // --- HIGH risk check (evaluated first) ---
+  if (ageYears >= 0 && ageYears <= 2) {
+    if (temp >= 38 || temp < 35) {
+      return 'High';
+    }
+    if (sys > 115 || dia > 80 || sys < 60 || dia < 30) {
+      return 'High';
+    }
+  } else if (ageYears >= 3 && ageYears <= 10) {
+    if (temp >= 38) {
+      return 'High';
+    }
+    if (sys >= 130 || dia >= 80 || sys < 90 || dia < 55) {
+      return 'High';
+    }
+  } else if (ageYears >= 11 && ageYears <= 65) {
+    if (temp >= 38) {
+      return 'High';
+    }
+    if (sys >= 180 || dia >= 120 || sys < 90 || dia < 60) {
+      return 'High';
+    }
+  } else if (ageYears > 65) {
+    if (temp >= 38 || temp < 35) {
+      return 'High';
+    }
+    if (sys >= 180 || dia >= 120 || sys < 90 || dia < 60) {
+      return 'High';
+    }
+  }
+
+  // --- MEDIUM risk check ---
+  if (ageYears >= 0 && ageYears <= 2) {
+    const medTemp = temp >= 37.5 && temp <= 38.9;
+    const medBp = (sys > 105 || dia > 70) || (sys < 60 || dia < 30);
+    if (medTemp || medBp) return 'Medium';
+  } else if (ageYears >= 3 && ageYears <= 10) {
+    const medTemp = temp >= 38 && temp <= 39.4;
+    const medBp = ((sys >= 115 && sys <= 129) || (dia >= 75 && dia <= 79)) || (sys < 90 || dia < 55);
+    if (medTemp || medBp) return 'Medium';
+  } else if (ageYears >= 11 && ageYears <= 65) {
+    const medTemp = temp >= 38 && temp <= 39;
+    const medBp = ((sys >= 120 && sys <= 179) || (dia >= 80 && dia <= 119)) || (sys < 90 || dia < 60);
+    if (medTemp || medBp) return 'Medium';
+  } else if (ageYears > 65) {
+    const medTemp = temp >= 37 && temp <= 38.5;
+    const medBp = ((sys >= 120 && sys <= 179) || (dia >= 80 && dia <= 119)) || (sys < 90 || dia < 60);
+    if (medTemp || medBp) return 'Medium';
+  }
+
+  // --- NORMAL (all values fall within normal ranges) ---
   return 'Normal';
 }
 
@@ -282,11 +331,16 @@ async function api(req, res, url) {
     let ageYears = today.getUTCFullYear() - dob.getUTCFullYear();
     if (today.getUTCMonth() < dob.getUTCMonth() || (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() < dob.getUTCDate())) ageYears -= 1;
     const nurseRiskLevel = stageId === 'nurse_vitals' ? nurseVitalsRiskLevel(stageEncounter.date_of_birth, input) : null;
-    const highTemperature = stageId === 'nurse_vitals' && (input.temperature_c < 36 || input.temperature_c > 39);
+    const ageGroupLabel = ageYears <= 2 ? '0–2 years' : ageYears <= 10 ? '3–10 years' : ageYears <= 65 ? '11–65 years' : '65+ years';
+    const riskMessage = nurseRiskLevel === 'High'
+      ? `Recorded vitals for age group ${ageGroupLabel} (age ${ageYears}) indicate HIGH risk. Temperature: ${input.temperature_c}°C, BP: ${input.systolic_bp_mmhg}/${input.diastolic_bp_mmhg} mmHg. Values fall outside safe ranges for this age group and require prompt clinical review.`
+      : nurseRiskLevel === 'Medium'
+        ? `Recorded vitals for age group ${ageGroupLabel} (age ${ageYears}) indicate MEDIUM risk. Temperature: ${input.temperature_c}°C, BP: ${input.systolic_bp_mmhg}/${input.diastolic_bp_mmhg} mmHg. Some values are borderline for this age group and should be monitored.`
+        : `Recorded vitals for age group ${ageGroupLabel} (age ${ageYears}) are within NORMAL range. Temperature: ${input.temperature_c}°C, BP: ${input.systolic_bp_mmhg}/${input.diastolic_bp_mmhg} mmHg.`;
     const stageOutputs = {
       nurse_vitals: nurseRiskLevel === 'High'
-        ? { status: 'urgent_clinician_review_prompt', risk_level: nurseRiskLevel, message: highTemperature ? 'Recorded temperature is below 36°C or above 39°C, a high-risk vital sign in the WHO Interagency Integrated Triage Tool.' : 'Recorded adult blood pressure is at or above 180 systolic or 120 diastolic, a very high reading that needs prompt clinical review.', source: highTemperature ? { title: 'WHO Interagency Integrated Triage Tool', url: 'https://cdn.who.int/media/docs/default-source/integrated-health-services-%28ihs%29/csy/general-scf-ref-card.pdf' } : { title: 'WHO hypertension fact sheet', url: 'https://www.who.int/news-room/fact-sheets/detail/hypertension' } }
-        : { status: ageYears >= 18 ? 'not_clinically_assessed' : 'adult_threshold_not_applicable', risk_level: nurseRiskLevel, message: 'Vitals saved. Risk level is a limited screen based only on the recorded blood pressure and temperature.' },
+        ? { status: 'urgent_clinician_review_prompt', risk_level: nurseRiskLevel, message: riskMessage, source: { title: 'WHO Interagency Integrated Triage Tool', url: 'https://cdn.who.int/media/docs/default-source/integrated-health-services-%28ihs%29/csy/general-scf-ref-card.pdf' } }
+        : { status: nurseRiskLevel === 'Medium' ? 'elevated_monitoring_recommended' : 'not_clinically_assessed', risk_level: nurseRiskLevel, message: riskMessage },
       doctor_initial: { status: 'clinician_review_required', message: 'WHO-based test suggestions are drafts only. The doctor has reviewed and edited the final test request before handoff.' },
       lab_results: { status: 'results_recorded', message: 'Results saved to the encounter for doctor review.' },
       doctor_results: { status: 'clinician_review_required', message: 'The clinician assessment and medication order are saved. WHO AWaRe infection guidance is not sufficient to select a patient-specific medicine/dose here: allergy, pregnancy, renal/liver status, diagnosis, and the hospital formulary are not available. No medicine or dose suggestion was generated.', source: { title: 'WHO AWaRe antibiotic book', url: 'https://www.who.int/publications/i/item/9789240062382' } },
